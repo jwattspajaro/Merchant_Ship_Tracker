@@ -3,7 +3,15 @@
 Documento vivo. Marca las casillas según avances. Si retomas esto en otra
 sesión o lo coge otra persona, **empieza por "Cómo retomar"** al final.
 
-Última actualización: 2026-09-14. **Fase B terminada.** Fase A bloqueada a la espera de la cabecera real del fichero de declaraciones.
+Última actualización: 2026-09-14.
+
+- **Fase B terminada.**
+- **Fase A: núcleo terminado.** Falta solo el *perfil de columnas* de tu fichero
+  real (`db/customs-profiles/<perfil>.json`). Todo lo demás —esquema, alias de
+  puerto, cargador, correlación, API y pruebas— ya está y funciona con un
+  fichero sintético.
+- **Dirección de la integración decidida:** la otra plataforma alimenta a esta.
+  Los datos aduaneros se replican aquí y la correlación se hace en este sistema.
 
 ---
 
@@ -56,7 +64,21 @@ Marta, Puerto Bolívar, Turbo, Coveñas, Tumaco, San Andrés, Ciénaga.
 
 ---
 
-## Decisiones pendientes (hace falta respuesta antes de la Fase A2)
+## Lo único que falta para cerrar la Fase A
+
+Escribir `db/customs-profiles/<tu-perfil>.json` copiando `ejemplo.json` y
+poniendo a la derecha los nombres reales de tus columnas. Nada más: el cargador
+no cambia.
+
+```bash
+node scripts/import-customs.js --file datos.csv --source dian_2019 --profile tuperfil
+```
+
+Si una columna del perfil no existe en el fichero, el cargador **falla antes de
+insertar nada** y dice cuál falta y qué cabecera encontró. No empieza a cargar
+para descubrirlo a mitad.
+
+## Decisiones pendientes (hace falta respuesta para escribir el perfil)
 
 - [ ] **¿Qué dataset es?** Microdato público DIAN, declaraciones propias
       (Formulario 500), o ambos. Cambia qué columnas hay y si existe el BL.
@@ -152,11 +174,11 @@ llegan posiciones atrasadas que rellenan el hueco.
 
 ---
 
-## Fase A — Declaraciones aduaneras
+## Fase A — Declaraciones aduaneras  🟡 NÚCLEO TERMINADO
 
 ### A1. Esquema
 
-- [ ] Tabla `customs_declarations` en `db/schema.sql`:
+- [x] Tabla `customs_declarations` en `db/schema.sql`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS customs_declarations (
@@ -190,55 +212,55 @@ CREATE INDEX IF NOT EXISTS idx_customs_hs        ON customs_declarations (hs_cod
 CREATE INDEX IF NOT EXISTS idx_customs_nit       ON customs_declarations (importer_nit);
 ```
 
-- [ ] Índice único por `(source, source_row_id)` para que recargar el mismo
+- [x] Índice único por `(source, source_row_id)` para que recargar el mismo
       fichero no duplique.
 
 ### A2. Resolver el puerto
 
-- [ ] Tabla de equivalencias `customs_port_aliases (source, alias, port_id)`:
+- [x] Tabla de equivalencias `customs_port_aliases (source, alias, port_id)`:
       el código o nombre de aduana que venga en el fichero, mapeado a `ports.id`.
-- [ ] Sembrarla con las aduanas colombianas marítimas (Cartagena, Buenaventura,
+- [x] Sembrarla con las aduanas colombianas marítimas (Cartagena, Buenaventura,
       Barranquilla, Santa Marta, etc.).
-- [ ] Lo que no resuelva se deja con `port_id NULL` y **se informa en el
+- [x] Lo que no resuelva se deja con `port_id NULL` y **se informa en el
       resumen de carga**, no se descarta en silencio.
 
 ### A3. Cargador
 
-- [ ] `scripts/import-customs.js --file <ruta> --source <nombre> --map <perfil>`.
-- [ ] Perfiles de mapeo de columnas en `db/customs-profiles/`, uno por formato,
+- [x] `scripts/import-customs.js --file <ruta> --source <nombre> --map <perfil>`.
+- [x] Perfiles de mapeo de columnas en `db/customs-profiles/`, uno por formato,
       porque los ficheros DIAN no son homogéneos entre años.
-- [ ] Manejar codificación Latin-1 y separador `;` (habitual en ficheros DIAN).
-- [ ] Carga por lotes dentro de transacción, idempotente.
-- [ ] Al terminar: filas leídas, insertadas, duplicadas, sin puerto resuelto,
+- [x] Manejar codificación Latin-1 y separador `;` (habitual en ficheros DIAN).
+- [x] Carga por lotes dentro de transacción, idempotente.
+- [x] Al terminar: filas leídas, insertadas, duplicadas, sin puerto resuelto,
       sin modo de transporte. **Que los descartes se vean.**
 
 ### A4. Correlación
 
-- [ ] `getTradeCorrelation(portId, {from, to, bucket, hsCode, flow})` en
+- [x] `getTradeCorrelation(portId, {from, to, bucket, hsCode, flow})` en
       `src/core/tradeCorrelation.js`:
   - serie aduanera: peso y valor por periodo,
   - serie observada: escalas, buques distintos, permanencia media,
     `avg_draught_delta_m`,
   - coeficiente de correlación de ambas series, **con su n**.
-- [ ] Filtrar a `transport_mode = 'maritimo'` y `free_zone = false`. Informar
+- [x] Filtrar a `transport_mode = 'maritimo'` y `free_zone = false`. Informar
       cuántas filas se dejaron fuera por cada motivo.
-- [ ] Si `n < 12` periodos: devolver el coeficiente pero con
+- [x] Si `n < 12` periodos: devolver el coeficiente pero con
       `reliable: false` y el porqué. Con 4 meses no hay correlación, hay ruido.
 
 ### A5. API
 
-- [ ] `GET /trade/correlation?port_id=&from=&to=&bucket=month&hs=&flow=`
-- [ ] `GET /trade/declarations?nit=&hs=&port_id=&from=&to=` (consulta directa)
-- [ ] Todas las respuestas repiten qué se excluyó y por qué.
+- [x] `GET /trade/correlation?port_id=&from=&to=&bucket=month&hs=&flow=`
+- [x] `GET /trade/declarations?nit=&hs=&port_id=&from=&to=` (consulta directa)
+- [x] Todas las respuestas repiten qué se excluyó y por qué.
 
 ### A6. Pruebas
 
-- [ ] Carga idempotente: pasar el mismo fichero dos veces no duplica.
-- [ ] Filas sin puerto resoluble se cuentan y se informan.
-- [ ] Zona franca y modo no marítimo quedan fuera de la correlación y se
+- [x] Carga idempotente: pasar el mismo fichero dos veces no duplica.
+- [x] Filas sin puerto resoluble se cuentan y se informan.
+- [x] Zona franca y modo no marítimo quedan fuera de la correlación y se
       contabilizan aparte.
-- [ ] Con n pequeño, `reliable: false`.
-- [ ] Una serie construida a propósito correlacionada con otra da el
+- [x] Con n pequeño, `reliable: false`.
+- [x] Una serie construida a propósito correlacionada con otra da el
       coeficiente esperado.
 
 ---

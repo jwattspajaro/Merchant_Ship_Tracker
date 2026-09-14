@@ -1,0 +1,46 @@
+{
+  "_comentario": [
+    "Perfil de mapeo de columnas. Uno por formato de origen.",
+    "Cambiar de origen es escribir otro de estos, no tocar el cargador.",
+    "",
+    "A la izquierda va el nombre de nuestro campo; a la derecha, el nombre de la",
+    "columna tal como venga en el fichero. Si una columna no existe en el origen,",
+    "pon null y se queda vacia: es preferible a rellenarla con algo inventado.",
+    "",
+    "Este fichero es un EJEMPLO con nombres plausibles. El perfil real se escribe",
+    "cuando se vea la cabecera del fichero de verdad."
+  ],
+
+  "delimiter": ";",
+  "encoding": "latin1",
+  "flow": "import",
+
+  "columns": {
+    "source_row_id": "NUMERO_DECLARACION",
+    "declared_on": "FECHA_DECLARACION",
+    "arrived_on": "FECHA_LLEGADA",
+    "importer_nit": "NIT_IMPORTADOR",
+    "importer_name": "RAZON_SOCIAL",
+    "hs_code": "SUBPARTIDA",
+    "origin_country": "PAIS_ORIGEN",
+    "destination_country": null,
+    "customs_office_raw": "ADUANA",
+    "port_raw": "PUERTO_INGRESO",
+    "transport_mode": "MODO_TRANSPORTE",
+    "gross_weight_kg": "PESO_BRUTO_KG",
+    "net_weight_kg": "PESO_NETO_KG",
+    "fob_usd": "VALOR_FOB",
+    "cif_usd": "VALOR_CIF",
+    "transport_doc": "DOCUMENTO_TRANSPORTE",
+    "free_zone": "ZONA_FRANCA"
+  },
+
+  "_hs_digits": "Recorta la subpartida a N digitos. null = dejarla como venga.",
+  "hs_digits": null,
+
+  "_free_zone_values": "Valores de la columna free_zone que significan 'si'.",
+  "free_zone_values": ["S", "SI", "1", "TRUE", "ZONA FRANCA"],
+
+  "_country_map": "Equivalencias de pais si el origen no usa ISO-2.",
+  "country_map": {}
+}

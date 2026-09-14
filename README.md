@@ -242,6 +242,8 @@ tráfico mercante. Súbelo con `SEA_ROUTE_MAX_LAT` si quieres rutas árticas.
 | GET | `/ports/:id/calls` | Escalas en una ventana. `?from=&to=&type=berth\|anchorage` |
 | GET | `/ports/:id/traffic` | Serie agregada por periodo + llegadas por origen. `?from=&to=&bucket=month` |
 | GET | `/routes/:originPortId/:destinationPortId` | Ruta estimada (`historical` / `sea_route` / `great_circle`) + estadísticas |
+| GET | `/trade/correlation` | Serie aduanera frente a serie observada + coeficientes con su n. `?port_id=&from=&to=&bucket=&hs=&flow=` |
+| GET | `/trade/declarations` | Declaraciones cargadas. `?nit=&hs=&port_id=&from=&to=` |
 | GET | `/health` | Estado del proceso y de la base de datos |
 
 Ejemplo:
@@ -364,7 +366,24 @@ El microdato público de aduanas no basta: no lleva BL ni nave. Hace falta la
 declaración en sí (que referencia el documento de transporte) o el manifiesto.
 El número de contenedor va en el BL, no en la declaración.
 
-**Correlación estadística.** No identifica envíos, y para eso no necesita el BL:
+**Correlación estadística.** No identifica envíos, y para eso no necesita el BL.
+Ya implementada: carga las declaraciones con
+`node scripts/import-customs.js --file datos.csv --source dian_2019 --profile <perfil>`
+y consulta `/trade/correlation`. El perfil de columnas vive en
+`db/customs-profiles/` — cambiar de formato de origen es escribir otro perfil,
+igual que cambiar de proveedor AIS es escribir otro archivo en `src/ingest/`.
+
+Tres cosas que hace para que la correlación no mienta:
+
+- **Excluye zona franca y modo no marítimo, y los cuenta.** Cada respuesta dice
+  cuántas filas quedaron fuera y por qué.
+- **Solo empareja periodos presentes en las dos series.** Rellenar con ceros los
+  meses ausentes inventaría correlación donde solo hay falta de datos.
+- **Con menos de 12 periodos devuelve `reliable: false`.** Y si una de las series
+  es constante, el coeficiente es `null`, no `0`: con una serie plana no hay
+  correlación que medir.
+
+
 
 | Dato aduanero | Contrapartida observada |
 |---|---|

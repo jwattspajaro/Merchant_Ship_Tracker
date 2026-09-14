@@ -149,3 +149,53 @@ CREATE TABLE IF NOT EXISTS vessel_daily_summary (
     positions_count INTEGER,
     PRIMARY KEY (mmsi, summary_date)
 );
+
+
+-- ---------------------------------------------------------------------------
+-- Declaraciones aduaneras (fase A del plan)
+--
+-- Segunda fuente, con otra fiabilidad y otro ciclo de vida que el AIS, y por
+-- eso en tablas propias. El AIS dice que buque estuvo donde; la aduana dice que
+-- mercancia entro o salio. Ninguna de las dos sabe lo de la otra.
+CREATE TABLE IF NOT EXISTS customs_declarations (
+    id                  BIGSERIAL PRIMARY KEY,
+    source              TEXT NOT NULL,      -- de donde salio el fichero o la API
+    source_row_id       TEXT,               -- id en el origen, para recargar sin duplicar
+    flow                TEXT NOT NULL CHECK (flow IN ('import', 'export')),
+    declared_on         DATE NOT NULL,
+    arrived_on          DATE,               -- llegada o embarque, si el origen la trae
+    importer_nit        TEXT,
+    importer_name       TEXT,
+    hs_code             TEXT NOT NULL,      -- subpartida
+    origin_country      TEXT,               -- ISO-2
+    destination_country TEXT,
+    customs_office_raw  TEXT,               -- aduana tal como viene
+    port_raw            TEXT,               -- puerto tal como viene
+    port_id             INTEGER REFERENCES ports(id),
+    transport_mode      TEXT,               -- 'maritimo' | 'aereo' | 'terrestre' | NULL
+    gross_weight_kg     NUMERIC,
+    net_weight_kg       NUMERIC,
+    fob_usd             NUMERIC,
+    cif_usd             NUMERIC,
+    transport_doc       TEXT,               -- BL, si el origen lo trae
+    free_zone           BOOLEAN NOT NULL DEFAULT FALSE,
+    raw                 JSONB,              -- la fila original, por si algo se mapeo mal
+    loaded_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Recargar el mismo fichero no debe duplicar nada.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_customs_source_row
+    ON customs_declarations (source, source_row_id) WHERE source_row_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_customs_port_date ON customs_declarations (port_id, declared_on);
+CREATE INDEX IF NOT EXISTS idx_customs_hs        ON customs_declarations (hs_code);
+CREATE INDEX IF NOT EXISTS idx_customs_nit       ON customs_declarations (importer_nit);
+CREATE INDEX IF NOT EXISTS idx_customs_flow_date ON customs_declarations (flow, declared_on);
+
+-- Equivalencias entre como nombra el puerto cada origen y nuestros puertos.
+-- El alias se guarda ya normalizado (mayusculas, sin tildes) para que
+-- "CARTAGENA", "Cartagena" y "Cartagena " sean el mismo.
+CREATE TABLE IF NOT EXISTS customs_port_aliases (
+    source   TEXT NOT NULL,
+    alias    TEXT NOT NULL,
+    port_id  INTEGER NOT NULL REFERENCES ports(id),
+    PRIMARY KEY (source, alias)
+);

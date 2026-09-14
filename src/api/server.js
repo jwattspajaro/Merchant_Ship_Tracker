@@ -17,6 +17,7 @@ import {
   findVessels,
 } from '../core/analytics.js';
 import { estimateRoute } from '../core/routes.js';
+import { getTradeCorrelation } from '../core/tradeCorrelation.js';
 import { describeCargoOperations, CARGO_OPERATIONS_UNAVAILABLE } from '../core/cargoOperations.js';
 import { isMainModule } from '../lib/isMain.js';
 
@@ -328,6 +329,72 @@ export function createApp() {
           'Mide presencia y tiempo de muelle, NO carga movida. El AIS no da toneladas ni contenedores. ' +
           'Una escala atracada larga sugiere mas trabajo que una corta, y nada mas.',
       });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // --- Comercio: aduana frente a lo observado ------------------------------
+
+  /**
+   * Correlaciona la serie declarada en aduana con la observada por AIS.
+   * Correlaciona SERIES, no envios: no dice que buque trajo que carga.
+   */
+  app.get('/trade/correlation', async (req, res, next) => {
+    try {
+      const portId = parseId(req.query.port_id);
+      if (portId === null) return res.status(400).json({ error: 'falta port_id' });
+
+      const port = await getPort(portId);
+      if (!port) return res.status(404).json({ error: 'puerto desconocido', id: portId });
+
+      const range = parseRange(req.query);
+      if (range.error) return res.status(400).json({ error: range.error });
+
+      const flow = String(req.query.flow || 'import');
+      if (!['import', 'export'].includes(flow)) {
+        return res.status(400).json({ error: "flow debe ser 'import' o 'export'" });
+      }
+
+      const result = await getTradeCorrelation(portId, {
+        ...range,
+        bucket: String(req.query.bucket || 'month'),
+        hsCode: req.query.hs ? String(req.query.hs).replace(/\D/g, '') || null : null,
+        flow,
+      });
+      res.json({ port: { id: port.id, unlocode: port.unlocode, name: port.name }, ...result });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** Consulta directa de declaraciones cargadas. */
+  app.get('/trade/declarations', async (req, res, next) => {
+    try {
+      const range = parseRange(req.query);
+      if (range.error) return res.status(400).json({ error: range.error });
+
+      const { rows } = await query(
+        `SELECT d.id, d.source, d.flow, d.declared_on, d.importer_nit, d.importer_name,
+                d.hs_code, d.origin_country, d.transport_mode, d.gross_weight_kg,
+                d.fob_usd, d.cif_usd, d.free_zone, d.port_id, p.unlocode, p.name AS port_name
+           FROM customs_declarations d
+           LEFT JOIN ports p ON p.id = d.port_id
+          WHERE d.declared_on >= $1 AND d.declared_on < $2
+            AND ($3::bigint IS NULL OR d.port_id = $3)
+            AND ($4::text IS NULL OR d.importer_nit = $4)
+            AND ($5::text IS NULL OR d.hs_code LIKE $5 || '%')
+          ORDER BY d.declared_on DESC
+          LIMIT $6`,
+        [
+          range.from, range.to,
+          req.query.port_id ? parseId(req.query.port_id) : null,
+          req.query.nit ? String(req.query.nit) : null,
+          req.query.hs ? String(req.query.hs).replace(/\D/g, '') || null : null,
+          clampInt(req.query.limit, 1, 2000, 200),
+        ],
+      );
+      res.json({ window: { from: range.from, to: range.to }, declarations: rows });
     } catch (err) {
       next(err);
     }
