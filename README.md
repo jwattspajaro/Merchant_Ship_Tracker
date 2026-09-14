@@ -396,6 +396,15 @@ conocidos.
 
 ---
 
+## Trabajo pendiente
+
+El plan de las dos fases siguientes —cargar declaraciones aduaneras como segunda
+fuente, y reconstruir los huecos de cobertura AIS— está en
+[docs/PLAN.md](docs/PLAN.md), con su lista de comprobación, las decisiones ya
+tomadas, las que faltan por responder y las trampas de interpretación.
+
+---
+
 ## Estructura
 
 ```text
@@ -418,6 +427,7 @@ src/api/server.js        API de consulta + servidor del visor
 public/index.html        Visor de mapa (Leaflet, sin build)
 src/jobs/                Particiones, retención, planificador
 scripts/demo.js          Datos ficticios para probar el visor
+docs/PLAN.md             Plan y checklist de las fases siguientes
 test/searoute.test.js    Enrutado: no cruza tierra, usa canales, distancias
 test/unit.test.js        Lógica pura
 test/acceptance.test.js  Criterios de aceptación de la sección 8
