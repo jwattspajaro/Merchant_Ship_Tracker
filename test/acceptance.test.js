@@ -93,11 +93,19 @@ test(
      * Viaje completo Rotterdam -> Hamburgo. Devuelve los instantes clave y los
      * eventos que produjo la maquina de estados.
      */
+    const rowById = async (table, id) =>
+      (await query(`SELECT * FROM ${table} WHERE id = $1`, [id])).rows[0];
+
     async function sailRotterdamToHamburg(mmsi, startAt, transitHours) {
       const events = { arrival: null, departure: null, underway: [], finalArrival: null };
+      // Estado capturado EN CADA MOMENTO del viaje: los criterios de la seccion
+      // 8 hablan de como queda la fila justo tras cada evento, no al final.
+      const snapshots = {};
 
       // 1. Llegada a Rotterdam, sobre el centroide -> atracado.
       events.arrival = await feed(mmsi, rotterdam.lat, rotterdam.lon, startAt, { sog: 0.1, navStatus: 'moored' });
+      const openedCallId = events.arrival.events.find((e) => e.type === 'port_call_opened')?.portCallId;
+      snapshots.callAfterArrival = openedCallId ? await rowById('port_calls', openedCallId) : null;
       // Sigue amarrado: no debe pasar nada nuevo.
       const stillThere = await feed(mmsi, rotterdam.lat + 0.002, rotterdam.lon, new Date(startAt.getTime() + 2 * HOUR), {
         sog: 0,
@@ -113,6 +121,10 @@ test(
         'el punto de salida debe caer fuera del radio de aproximacion',
       );
       events.departure = await feed(mmsi, dLat, dLon, departedAt);
+      const closedCallId = events.departure.events.find((e) => e.type === 'port_call_closed')?.portCallId;
+      const openedLegId = events.departure.events.find((e) => e.type === 'route_leg_opened')?.routeLegId;
+      snapshots.callAfterDeparture = closedCallId ? await rowById('port_calls', closedCallId) : null;
+      snapshots.legAfterDeparture = openedLegId ? await rowById('route_legs', openedLegId) : null;
 
       // 3. Travesia: puntos intermedios en mar abierto.
       const steps = 12;
@@ -132,7 +144,7 @@ test(
       const arrivedAt = new Date(departedAt.getTime() + transitHours * HOUR);
       events.finalArrival = await feed(mmsi, hamburg.lat, hamburg.lon, arrivedAt, { sog: 0.2, navStatus: 'moored' });
 
-      return { ...events, startAt, departedAt, arrivedAt };
+      return { ...events, snapshots, startAt, departedAt, arrivedAt };
     }
 
     // --- Criterio 1: al llegar se abre una escala sin departed_at ----------
@@ -147,10 +159,14 @@ test(
       assert.equal(opened.portId, rotterdam.id);
       assert.equal(opened.callType, 'berth', 'sobre el centroide el buque cuenta como atracado');
 
-      const { rows } = await query('SELECT * FROM port_calls WHERE id = $1', [opened.portCallId]);
-      assert.equal(rows[0].departed_at, null);
-      assert.equal(Number(rows[0].mmsi), MMSI_A);
-      assert.deepEqual(rows[0].arrived_at, voyageA.startAt);
+      // Estado de la fila justo despues de llegar, antes de volver a zarpar.
+      const call = voyageA.snapshots.callAfterArrival;
+      assert.equal(call.departed_at, null, 'la escala recien abierta no tiene salida');
+      assert.equal(Number(call.mmsi), MMSI_A);
+      assert.equal(call.port_id, rotterdam.id);
+      assert.equal(call.call_type, 'berth');
+      assert.deepEqual(call.arrived_at, voyageA.startAt);
+      assert.equal(call.id, opened.portCallId);
     });
 
     // --- Criterio 2: al salir se cierra la escala y se abre el tramo -------
@@ -161,15 +177,20 @@ test(
       assert.ok(closed, 'deberia haberse cerrado la escala');
       assert.ok(openedLeg, 'deberia haberse abierto el tramo');
 
-      const { rows: calls } = await query('SELECT * FROM port_calls WHERE id = $1', [closed.portCallId]);
-      assert.deepEqual(calls[0].departed_at, voyageA.departedAt);
+      // La escala queda cerrada con la marca de tiempo de ESTA posicion.
+      const call = voyageA.snapshots.callAfterDeparture;
+      assert.equal(call.id, closed.portCallId);
+      assert.deepEqual(call.departed_at, voyageA.departedAt);
 
-      const { rows: legs } = await query('SELECT * FROM route_legs WHERE id = $1', [openedLeg.routeLegId]);
-      assert.equal(legs[0].origin_port_id, rotterdam.id);
-      assert.equal(legs[0].destination_port_id, null);
-      assert.equal(legs[0].arrived_at, null);
-      assert.equal(legs[0].transit_seconds, null);
-      assert.deepEqual(legs[0].departed_at, voyageA.departedAt);
+      // Y el tramo nace con origen correcto y destino todavia sin resolver.
+      const leg = voyageA.snapshots.legAfterDeparture;
+      assert.equal(leg.id, openedLeg.routeLegId);
+      assert.equal(leg.origin_port_id, rotterdam.id);
+      assert.equal(leg.destination_port_id, null);
+      assert.equal(leg.arrived_at, null);
+      assert.equal(leg.transit_seconds, null);
+      assert.equal(leg.path_points, null);
+      assert.deepEqual(leg.departed_at, voyageA.departedAt);
     });
 
     await t.test('navegar en mar abierto no genera eventos', () => {
@@ -406,9 +427,12 @@ test(
         assert.equal(leg.body.current_leg.destination_port, null);
         assert.equal((await get(`/vessels/${MMSI_A}/current-leg`)).body.current_leg, null);
 
+        // Cuatro escalas cerradas en Rotterdam: A, B y C de 4 h, y la del buque
+        // que sigue en ruta, de 3 h -> media 3,75 h.
         const ds = await get(`/ports/${rotterdam.id}/dwell-stats`);
-        assert.equal(ds.body.dwell_stats.berth.calls, 3);
-        assert.equal(ds.body.dwell_stats.berth.avg_dwell_hours, 4);
+        assert.equal(ds.body.dwell_stats.berth.calls, 4);
+        assert.equal(ds.body.dwell_stats.berth.avg_dwell_hours, 3.75);
+        // El fondeo del buque D sigue abierto: no entra en la estadistica.
         assert.equal(ds.body.dwell_stats.anchorage.calls, 0);
 
         const route = await get(`/routes/${rotterdam.id}/${hamburg.id}`);

@@ -15,12 +15,11 @@ export function getPool() {
   if (pool) return pool;
   pool = new pg.Pool({
     connectionString: requireDatabaseUrl(),
+    // search_path como parametro de arranque de la conexion, no como un SET
+    // posterior: asi no compite con la primera consulta que se lance sobre ella.
+    options: `-c search_path=${safeSchemaName(config.dbSchema)},public`,
     max: 10,
     idleTimeoutMillis: 30_000,
-  });
-  // Cada conexion nueva trabaja en el esquema configurado.
-  pool.on('connect', (client) => {
-    client.query(`SET search_path TO ${quoteIdent(config.dbSchema)}, public`).catch(() => {});
   });
   pool.on('error', (err) => {
     console.error('[db] error en conexion inactiva:', err.message);
@@ -30,6 +29,20 @@ export function getPool() {
 
 export function quoteIdent(name) {
   return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+/**
+ * El parametro de arranque `options` no admite comillas, asi que el nombre del
+ * esquema se valida en vez de escaparse: o es un identificador simple, o se
+ * rechaza. Evita que un DB_SCHEMA malformado acabe inyectado en la conexion.
+ */
+export function safeSchemaName(name) {
+  if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(name)) {
+    throw new Error(
+      `DB_SCHEMA invalido: "${name}". Usa letras, digitos y guion bajo, empezando por letra o guion bajo.`,
+    );
+  }
+  return name;
 }
 
 export function query(text, params) {
