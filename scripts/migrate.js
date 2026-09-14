@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { config } from '../src/config.js';
 import { query, quoteIdent, closePool } from '../src/db.js';
 import { ensurePartitions } from '../src/jobs/partitions.js';
+import { isMainModule } from '../src/lib/isMain.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -24,7 +25,7 @@ export async function migrate() {
   );
 }
 
-if (process.argv[1]?.endsWith('migrate.js')) {
+if (isMainModule(import.meta.url)) {
   migrate()
     .then(() => closePool())
     .catch(async (err) => {

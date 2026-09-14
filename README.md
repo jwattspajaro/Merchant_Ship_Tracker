@@ -26,11 +26,47 @@ Tres procesos independientes:
 
 ```bash
 npm run ingest              # cliente AIS -> base de datos (necesita AISSTREAM_API_KEY)
-npm run api                 # API de consulta en http://localhost:3000
+npm run api                 # API + visor en http://localhost:3000
 npm run jobs                # mantenimiento diario: particiones y retención
 ```
 
 Cada uno puede correr en su propia máquina; solo comparten la base de datos.
+
+### Ver algo sin esperar
+
+Sin clave AIS y sin histórico acumulado, el visor sale vacío. Para poder mirarlo
+desde el primer minuto:
+
+```bash
+npm run demo                # buques ficticios navegando entre puertos del seed
+npm run api                 # y abre http://localhost:3000
+```
+
+`npm run demo` genera **datos inventados** (MMSI y posiciones falsos) para probar
+el visor y la API. No lo ejecutes sobre la base de producción.
+
+---
+
+## Visor
+
+`npm run api` sirve un visor de mapa en `/`, además de la API. Lo sirve el propio
+proceso a propósito: una página alojada en otro origen no puede consultar una API
+en `localhost`, así que un visor externo no funcionaría.
+
+- **Flota** — buques sobre el mapa, en azul los de carga y naranja los tanque.
+  Al pinchar uno: su escala actual (atracado o fondeado), la permanencia, la
+  ventana probable de carga con su advertencia, y el tramo en curso.
+- **Rutas** — eliges dos puertos y dibuja la ruta estimada. Línea continua verde
+  si es histórica, discontinua ámbar si es gran círculo; el panel dice cuál es y
+  por qué.
+- Los círculos verdes son los radios de aproximación: el "puerto", para este
+  sistema, es ese círculo y no un punto.
+- Se refresca cada 30 s.
+
+Usa Leaflet y teselas de OpenStreetMap desde CDN, así que necesita salida a
+internet para el mapa de fondo (los datos salen siempre de tu base). Las teselas
+públicas de OSM valen para uso local; si lo despliegas para mucha gente, cambia
+la capa por un proveedor propio.
 
 ### Pruebas
 
@@ -65,7 +101,7 @@ recreo, SAR y WIG quedan fuera de la base de datos, no solo de las consultas.
 
 Máquina de estados que corre con cada posición nueva:
 
-```
+```text
                       posición fuera del radio de ESE puerto
    ┌────────────────┐ ───────────────────────────────────────► ┌──────────────┐
    │ escala abierta │   cierra port_call, abre route_leg        │ tramo abierto│
@@ -248,7 +284,7 @@ npm run job:retention
 
 ## Estructura
 
-```
+```text
 db/schema.sql            Esquema completo
 db/seed_ports.sql        Puertos de referencia
 src/config.js            Configuración por entorno
@@ -261,8 +297,10 @@ src/core/routes.js       Estimación de rutas (4.5)
 src/core/cargoOperations.js  Lo que el AIS no da (4.3)
 src/ingest/aisstream.js  Capa de proveedor — el único archivo que cambia
 src/ingest/index.js      Pipeline: filtro, cola, volcado por lotes
-src/api/server.js        API de consulta
+src/api/server.js        API de consulta + servidor del visor
+public/index.html        Visor de mapa (Leaflet, sin build)
 src/jobs/                Particiones, retención, planificador
+scripts/demo.js          Datos ficticios para probar el visor
 test/unit.test.js        Lógica pura
 test/acceptance.test.js  Criterios de aceptación de la sección 8
 ```

@@ -1,4 +1,6 @@
 import express from 'express';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { config } from '../config.js';
 import { query, closePool } from '../db.js';
 import {
@@ -11,11 +13,18 @@ import {
 } from '../core/analytics.js';
 import { estimateRoute } from '../core/routes.js';
 import { describeCargoOperations, CARGO_OPERATIONS_UNAVAILABLE } from '../core/cargoOperations.js';
+import { isMainModule } from '../lib/isMain.js';
+
+const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'public');
 
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json());
+
+  // Visor de mapa. Se sirve desde el propio proceso a proposito: una pagina
+  // alojada en otro origen no puede consultar esta API en localhost.
+  app.use(express.static(publicDir));
 
   app.get('/health', async (_req, res, next) => {
     try {
@@ -293,7 +302,7 @@ function emptyStats() {
   };
 }
 
-if (process.argv[1]?.endsWith('api/server.js')) {
+if (isMainModule(import.meta.url)) {
   const app = createApp();
   const server = app.listen(config.port, () => {
     console.log(`[api] escuchando en http://localhost:${config.port}`);

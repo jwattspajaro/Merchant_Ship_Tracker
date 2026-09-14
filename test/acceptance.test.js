@@ -147,6 +147,20 @@ test(
       return { ...events, snapshots, startAt, departedAt, arrivedAt };
     }
 
+    await t.test('las particiones se crean en el esquema activo, no en otro', async () => {
+      // Si la base ya tiene una instalacion en "public", un to_regclass sin
+      // cualificar encuentra la particion de alla y no crea la de aqui: la
+      // primera posicion falla con "no partition of relation".
+      const expected = partitionNameFor(monthStart(now));
+      const { rows } = await query(
+        `SELECT n.nspname FROM pg_class c
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relname = $1 AND n.nspname = $2`,
+        [expected, TEST_SCHEMA],
+      );
+      assert.equal(rows.length, 1, `${expected} deberia existir en ${TEST_SCHEMA}`);
+    });
+
     // --- Criterio 1: al llegar se abre una escala sin departed_at ----------
 
     const MMSI_A = 538000101;

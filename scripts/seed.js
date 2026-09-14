@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { query, closePool } from '../src/db.js';
+import { isMainModule } from '../src/lib/isMain.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -13,7 +14,7 @@ export async function seedPorts() {
   return rows[0].n;
 }
 
-if (process.argv[1]?.endsWith('seed.js')) {
+if (isMainModule(import.meta.url)) {
   seedPorts()
     .then(() => closePool())
     .catch(async (err) => {

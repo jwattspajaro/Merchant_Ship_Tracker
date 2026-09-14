@@ -9,6 +9,7 @@
   "scripts": {
     "migrate": "node scripts/migrate.js",
     "seed": "node scripts/seed.js",
+    "demo": "node scripts/demo.js",
     "ingest": "node src/ingest/index.js",
     "api": "node src/api/server.js",
     "jobs": "node src/jobs/scheduler.js",

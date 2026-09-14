@@ -46,7 +46,14 @@ export async function ensurePartitions(now = new Date(), monthsAhead = MONTHS_AH
 
     // CREATE TABLE IF NOT EXISTS devuelve el mismo command tag exista o no la
     // tabla, asi que preguntamos antes para poder informar de lo que se creo.
-    const { rows } = await query('SELECT to_regclass($1) AS oid', [name]);
+    //
+    // La pregunta va acotada al esquema activo: un to_regclass sin cualificar
+    // resuelve por search_path y encontraria la particion homonima de otro
+    // esquema (public, por ejemplo), dando por hecho que ya existe aqui.
+    const { rows } = await query(
+      "SELECT to_regclass(format('%I.%I', current_schema(), $1::text)) AS oid",
+      [name],
+    );
     if (rows[0].oid) continue;
 
     try {

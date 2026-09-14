@@ -7,6 +7,7 @@ import { loadPortIndex } from '../core/portIndex.js';
 import { processPosition } from '../core/callDetector.js';
 import { ensurePartitions } from '../jobs/partitions.js';
 import { AisStreamSource } from './aisstream.js';
+import { isMainModule } from '../lib/isMain.js';
 
 const PORT_INDEX_RELOAD_MS = 10 * 60_000;
 const STATS_LOG_MS = 30_000;
@@ -249,7 +250,7 @@ async function main() {
   await pipeline.start();
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('ingest/index.js')) {
+if (isMainModule(import.meta.url)) {
   main().catch((err) => {
     console.error('[ingest] fallo al arrancar:', err);
     process.exit(1);

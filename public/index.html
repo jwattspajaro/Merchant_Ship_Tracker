@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Merchant Ship Tracker</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --bg: #0e1620;
+    --panel: #16202c;
+    --panel-2: #1d2937;
+    --line: #2a3a4d;
+    --ink: #e6edf5;
+    --ink-dim: #93a4b8;
+    --ink-faint: #64748b;
+    --cargo: #4ea8de;
+    --tanker: #f4a259;
+    --port: #7ee787;
+    --accent: #4ea8de;
+    --warn: #f0b429;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--ink);
+    display: grid; grid-template-columns: 340px 1fr; height: 100vh; overflow: hidden;
+  }
+
+  /* --- Panel lateral --- */
+  #side {
+    background: var(--panel); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  header { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+  header p { margin: 2px 0 0; font-size: 12px; color: var(--ink-faint); }
+
+  .tabs { display: flex; border-bottom: 1px solid var(--line); }
+  .tabs button {
+    flex: 1; background: none; border: 0; border-bottom: 2px solid transparent;
+    color: var(--ink-dim); padding: 10px 4px; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .tabs button:hover { color: var(--ink); }
+
+  .pane { padding: 14px 16px; overflow-y: auto; flex: 1; min-height: 0; }
+  .pane[hidden] { display: none; }
+
+  label { display: block; font-size: 11px; text-transform: uppercase;
+          letter-spacing: .06em; color: var(--ink-faint); margin: 12px 0 5px; }
+  select, input[type="search"] {
+    width: 100%; background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px; padding: 8px 9px;
+    font-size: 13px; font-family: inherit;
+  }
+  select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button.action {
+    width: 100%; margin-top: 14px; background: var(--accent); color: #06121d;
+    border: 0; border-radius: 6px; padding: 9px; font-size: 13px; font-weight: 650;
+    cursor: pointer; font-family: inherit;
+  }
+  button.action:disabled { opacity: .5; cursor: default; }
+
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px;
+            color: var(--ink-dim); padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  .legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+
+  .vlist { list-style: none; margin: 8px 0 0; padding: 0; }
+  .vlist li {
+    padding: 8px 9px; border: 1px solid transparent; border-radius: 6px; cursor: pointer;
+  }
+  .vlist li:hover { background: var(--panel-2); }
+  .vlist li[aria-current="true"] { background: var(--panel-2); border-color: var(--accent); }
+  .vlist .nm { font-weight: 600; font-size: 13px; }
+  .vlist .meta { font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; font-size: 13px; }
+  dt { color: var(--ink-faint); }
+  dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+  .card { background: var(--panel-2); border: 1px solid var(--line);
+          border-radius: 8px; padding: 12px; margin-top: 12px; }
+  .card h3 { margin: 0 0 9px; font-size: 12px; text-transform: uppercase;
+             letter-spacing: .06em; color: var(--ink-dim); font-weight: 600; }
+  .pill { display: inline-block; font-size: 11px; padding: 2px 7px; border-radius: 99px;
+          border: 1px solid var(--line); color: var(--ink-dim); }
+  .pill.berth { color: #06121d; background: var(--port); border-color: transparent; }
+  .pill.anchorage { color: #06121d; background: var(--warn); border-color: transparent; }
+  .pill.historical { color: #06121d; background: var(--port); border-color: transparent; }
+  .pill.great_circle { color: var(--warn); border-color: var(--warn); }
+
+  .note { font-size: 12px; color: var(--ink-faint); margin-top: 10px; line-height: 1.45; }
+  .note strong { color: var(--warn); font-weight: 600; }
+  .empty { color: var(--ink-faint); font-size: 13px; padding: 20px 0; text-align: center; }
+
+  /* --- Mapa --- */
+  #map { height: 100vh; background: #0b131c; }
+  .leaflet-container { font: inherit; background: #0b131c; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+  }
+  .leaflet-popup-content { margin: 10px 12px; font-size: 13px; }
+  .leaflet-bar a { background: var(--panel-2); color: var(--ink); border-color: var(--line); }
+  .leaflet-bar a:hover { background: var(--panel); }
+  /* Las teselas OSM son claras. Se invierten y se rota el tono 180 grados para
+     que el agua vuelva a ser azulada en vez de naranja, manteniendo el
+     contraste entre tierra y mar. */
+  .leaflet-tile-pane {
+    filter: invert(1) hue-rotate(180deg) brightness(.78) contrast(1.15) saturate(.55);
+  }
+
+  #status {
+    position: absolute; right: 12px; top: 12px; z-index: 1000;
+    background: rgba(22,32,44,.94); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 11px; font-size: 12px; color: var(--ink-dim);
+  }
+
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 46vh 54vh; }
+    #side { border-right: 0; border-bottom: 1px solid var(--line); }
+    #map { height: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<div id="side">
+  <header>
+    <h1>Merchant Ship Tracker</h1>
+    <p>Carga y tanque · posiciones AIS propias</p>
+  </header>
+
+  <div class="legend">
+    <span><i style="background:var(--cargo)"></i>Cargo</span>
+    <span><i style="background:var(--tanker)"></i>Tanker</span>
+    <span><i style="background:var(--port)"></i>Puerto</span>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-fleet" aria-selected="true" aria-controls="pane-fleet">Flota</button>
+    <button role="tab" id="tab-route" aria-selected="false" aria-controls="pane-route">Rutas</button>
+  </div>
+
+  <div class="pane" id="pane-fleet" role="tabpanel" aria-labelledby="tab-fleet">
+    <label for="f-type">Tipo</label>
+    <select id="f-type">
+      <option value="">Todos</option>
+      <option value="Cargo">Cargo</option>
+      <option value="Tanker">Tanker</option>
+    </select>
+
+    <label for="f-search">Buscar</label>
+    <input type="search" id="f-search" placeholder="Nombre o MMSI" autocomplete="off">
+
+    <ul class="vlist" id="vessel-list"></ul>
+    <div id="vessel-detail"></div>
+  </div>
+
+  <div class="pane" id="pane-route" role="tabpanel" aria-labelledby="tab-route" hidden>
+    <label for="r-origin">Puerto de origen</label>
+    <select id="r-origin"></select>
+
+    <label for="r-dest">Puerto de destino</label>
+    <select id="r-dest"></select>
+
+    <button class="action" id="r-go">Estimar ruta</button>
+    <div id="route-detail"></div>
+  </div>
+</div>
+
+<div style="position:relative">
+  <div id="map"></div>
+  <div id="status">Cargando…</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const REFRESH_MS = 30000;
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $('status');
+
+  const map = L.map('map', { worldCopyJump: true, minZoom: 2 }).setView([30, 10], 3);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18, attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+
+  const portLayer   = L.layerGroup().addTo(map);
+  const vesselLayer = L.layerGroup().addTo(map);
+  const routeLayer  = L.layerGroup().addTo(map);
+
+  let ports = [];
+  let vessels = [];
+  let selectedMmsi = null;
+  const markers = new Map();
+
+  const setStatus = (t) => { statusEl.textContent = t; };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  async function api(path) {
+    const res = await fetch(path);
+    const body = await res.json();
+    // 501 en /cargo-operations es una respuesta con contenido, no un fallo.
+    if (!res.ok && res.status !== 501) throw new Error(body.error || res.statusText);
+    return body;
+  }
+
+  function hours(sec) {
+    if (sec === null || sec === undefined) return '—';
+    const h = sec / 3600;
+    if (h < 48) return h.toFixed(1) + ' h';
+    return (h / 24).toFixed(1) + ' d';
+  }
+  const when = (iso) => (iso ? new Date(iso).toLocaleString() : '—');
+
+  // --- Puertos -------------------------------------------------------------
+
+  async function loadPorts() {
+    ports = (await api('/ports')).ports;
+    for (const p of ports) {
+      L.circleMarker([p.lat, p.lon], {
+        radius: 4, color: '#7ee787', weight: 1.5, fillOpacity: .55
+      })
+        .bindPopup(
+          '<b>' + esc(p.name) + '</b><br>' + esc(p.unlocode || '') + ' · ' + esc(p.country || '') +
+          '<br><span style="color:#93a4b8">radio ' + (p.approach_radius_m / 1000).toFixed(0) + ' km</span>'
+        )
+        .addTo(portLayer);
+      // El radio de aproximacion: el "puerto" es este circulo, no un punto.
+      L.circle([p.lat, p.lon], {
+        radius: p.approach_radius_m, color: '#7ee787',
+        weight: 1, opacity: .25, fillOpacity: .05, interactive: false
+      }).addTo(portLayer);
+    }
+
+    const opts = ports
+      .map((p) => '<option value="' + p.id + '">' + esc(p.name) +
+                  (p.unlocode ? ' (' + esc(p.unlocode) + ')' : '') + '</option>')
+      .join('');
+    $('r-origin').innerHTML = opts;
+    $('r-dest').innerHTML = opts;
+    if (ports.length > 1) $('r-dest').selectedIndex = 1;
+  }
+
+  // --- Flota ---------------------------------------------------------------
+
+  async function loadVessels() {
+    const type = $('f-type').value;
+    vessels = (await api('/vessels?limit=500' + (type ? '&type=' + type : ''))).vessels;
+    drawVessels();
+    renderList();
+    setStatus(vessels.length + ' buques · ' + new Date().toLocaleTimeString());
+  }
+
+  function drawVessels() {
+    vesselLayer.clearLayers();
+    markers.clear();
+    for (const v of vessels) {
+      if (!v.last_position) continue;
+      const color = v.ship_type_label === 'Tanker' ? '#f4a259' : '#4ea8de';
+      const m = L.circleMarker([v.last_position.lat, v.last_position.lon], {
+        radius: 5, color, weight: 1.5, fillColor: color, fillOpacity: .8
+      })
+        .bindPopup('<b>' + esc(v.name || v.mmsi) + '</b><br>' +
+                   esc(v.ship_type_label) + ' · MMSI ' + v.mmsi)
+        .on('click', () => selectVessel(v.mmsi));
+      m.addTo(vesselLayer);
+      markers.set(v.mmsi, m);
+    }
+  }
+
+  function renderList() {
+    const q = $('f-search').value.trim().toLowerCase();
+    const shown = vessels.filter((v) =>
+      !q || String(v.mmsi).includes(q) || (v.name || '').toLowerCase().includes(q));
+
+    $('vessel-list').innerHTML = shown.length
+      ? shown.slice(0, 200).map((v) =>
+          '<li data-mmsi="' + v.mmsi + '" aria-current="' + (v.mmsi === selectedMmsi) + '">' +
+            '<div class="nm">' + esc(v.name || 'Sin nombre') + '</div>' +
+            '<div class="meta">' + esc(v.ship_type_label) + ' · ' + v.mmsi +
+              (v.flag ? ' · ' + esc(v.flag) : '') +
+              (v.last_position ? ' · ' + v.last_position.sog + ' kn' : ' · sin posición') +
+            '</div>' +
+          '</li>').join('')
+      : '<div class="empty">Ningún buque coincide.</div>';
+  }
+
+  async function selectVessel(mmsi) {
+    selectedMmsi = mmsi;
+    renderList();
+    const box = $('vessel-detail');
+    box.innerHTML = '<div class="empty">Consultando…</div>';
+
+    const marker = markers.get(mmsi);
+    if (marker) map.setView(marker.getLatLng(), Math.max(map.getZoom(), 6));
+
+    try {
+      const [dwell, leg] = await Promise.all([
+        api('/vessels/' + mmsi + '/dwell'),
+        api('/vessels/' + mmsi + '/current-leg')
+      ]);
+      box.innerHTML = renderVessel(dwell, leg);
+    } catch (err) {
+      box.innerHTML = '<div class="empty">No se pudo consultar: ' + esc(err.message) + '</div>';
+    }
+  }
+
+  function renderVessel(dwell, leg) {
+    const v = dwell.vessel;
+    let html =
+      '<div class="card"><h3>' + esc(v.name || 'Sin nombre') + '</h3><dl>' +
+        '<dt>MMSI</dt><dd>' + v.mmsi + '</dd>' +
+        '<dt>IMO</dt><dd>' + (v.imo || '—') + '</dd>' +
+        '<dt>Tipo</dt><dd>' + esc(v.ship_type_label) + ' (' + v.ship_type_code + ')</dd>' +
+        '<dt>Bandera</dt><dd>' + (v.flag || '—') + '</dd>' +
+        '<dt>Visto</dt><dd>' + when(v.last_seen_at) + '</dd>' +
+      '</dl></div>';
+
+    const c = dwell.port_call;
+    if (c) {
+      html +=
+        '<div class="card"><h3>Escala ' +
+          '<span class="pill ' + c.call_type + '">' +
+            (c.call_type === 'berth' ? 'atracado' : 'fondeado') + '</span></h3><dl>' +
+          '<dt>Puerto</dt><dd>' + esc(c.port.name) + '</dd>' +
+          '<dt>Llegada</dt><dd>' + when(c.arrived_at) + '</dd>' +
+          '<dt>Salida</dt><dd>' + (c.departed_at ? when(c.departed_at) : 'sigue ahí') + '</dd>' +
+          '<dt>Permanencia</dt><dd>' + hours(c.dwell_seconds) + '</dd>' +
+        '</dl>';
+
+      // Seccion 4.3: la ventana es inferida, y hay que decirlo aqui tambien.
+      const w = dwell.cargo_operations && dwell.cargo_operations.likely_working_window;
+      html += w
+        ? '<p class="note"><strong>Ventana probable de carga:</strong> ' + hours(w.seconds) +
+          ' en el muelle. Es una inferencia de la posición AIS, no una confirmación de que se esté moviendo carga. ' +
+          'Cantidad y horas de descarga reales no están disponibles en esta fase.</p>'
+        : '<p class="note">Fondeado: espera, no trabajo.</p>';
+      html += '</div>';
+    } else {
+      html += '<div class="card"><h3>Escala</h3><div class="empty">Sin escalas registradas.</div></div>';
+    }
+
+    const l = leg.current_leg;
+    html += '<div class="card"><h3>Tramo en curso</h3>' + (l
+      ? '<dl>' +
+          '<dt>Origen</dt><dd>' + esc(l.origin_port ? l.origin_port.name : '—') + '</dd>' +
+          '<dt>Zarpó</dt><dd>' + when(l.departed_at) + '</dd>' +
+          '<dt>Navegando</dt><dd>' + hours(l.elapsed_seconds) + '</dd>' +
+        '</dl><p class="note">El destino se sabe cuando el buque llega. No se predice.</p>'
+      : '<div class="empty">En puerto o sin tramo abierto.</div>') + '</div>';
+
+    return html;
+  }
+
+  // --- Rutas ---------------------------------------------------------------
+
+  /**
+   * Leaflet dibuja una recta de lado a lado del mapa si dos puntos consecutivos
+   * caen a distinto lado del antimeridiano. Se parte la linea en ese salto.
+   */
+  /**
+   * Longitudes continuas. Un Tokio -> Los Angeles va de +139 a -118: con esos
+   * numeros crudos, Leaflet dibuja una raya que cruza el mapa entero de vuelta
+   * y el fitBounds abarca el mundo en vez del Pacifico. Sumando o restando 360
+   * la secuencia no salta; Leaflet proyecta longitudes fuera de [-180, 180] de
+   * forma continua, asi que la linea cruza el antimeridiano como debe.
+   */
+  function unwrapLongitudes(points) {
+    const out = [[points[0][0], points[0][1]]];
+    let offset = 0;
+    for (let i = 1; i < points.length; i++) {
+      const delta = points[i][1] - points[i - 1][1];
+      if (delta > 180) offset -= 360;
+      else if (delta < -180) offset += 360;
+      out.push([points[i][0], points[i][1] + offset]);
+    }
+    return out;
+  }
+
+  async function estimateRoute() {
+    const o = $('r-origin').value;
+    const d = $('r-dest').value;
+    const box = $('route-detail');
+    if (o === d) { box.innerHTML = '<div class="empty">Elige dos puertos distintos.</div>'; return; }
+
+    $('r-go').disabled = true;
+    box.innerHTML = '<div class="empty">Calculando…</div>';
+    routeLayer.clearLayers();
+
+    try {
+      const r = await api('/routes/' + o + '/' + d);
+      const historical = r.source === 'historical';
+      const color = historical ? '#7ee787' : '#f0b429';
+
+      if (r.path_points.length) {
+        const path = unwrapLongitudes(r.path_points);
+        L.polyline(path, {
+          color, weight: 3, opacity: .9,
+          dashArray: historical ? null : '7 7'   // discontinua = no observada
+        }).addTo(routeLayer);
+        map.fitBounds(L.latLngBounds(path).pad(0.15));
+      }
+
+      const s = r.transit_stats;
+      box.innerHTML =
+        '<div class="card"><h3>' + esc(r.origin.name) + ' → ' + esc(r.destination.name) +
+          ' <span class="pill ' + r.source + '">' +
+            (historical ? 'histórica' : 'gran círculo') + '</span></h3><dl>' +
+          '<dt>Tramos usados</dt><dd>' + r.legs_considered + '</dd>' +
+          '<dt>Duración típica</dt><dd>' + hours(r.transit_seconds) + '</dd>' +
+          '<dt>Media</dt><dd>' + hours(s.avg_transit_seconds) + '</dd>' +
+          '<dt>Mín / Máx</dt><dd>' + hours(s.min_transit_seconds) + ' / ' +
+                                     hours(s.max_transit_seconds) + '</dd>' +
+        '</dl>' +
+        (historical
+          ? '<p class="note">Traza real del viaje cuya duración está más cerca de la mediana. ' +
+            'No es un promedio de caminos.</p>'
+          : '<p class="note"><strong>' + esc(r.transit_note || '') + '</strong> ' +
+            'La línea es geometría esférica, no un recorrido observado.</p>') +
+        '</div>';
+    } catch (err) {
+      box.innerHTML = '<div class="empty">' + esc(err.message) + '</div>';
+    } finally {
+      $('r-go').disabled = false;
+    }
+  }
+
+  // --- Eventos -------------------------------------------------------------
+
+  for (const tab of document.querySelectorAll('[role="tab"]')) {
+    tab.addEventListener('click', () => {
+      for (const t of document.querySelectorAll('[role="tab"]')) {
+        const on = t === tab;
+        t.setAttribute('aria-selected', String(on));
+        $(t.getAttribute('aria-controls')).hidden = !on;
+      }
+    });
+  }
+
+  $('vessel-list').addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-mmsi]');
+    if (li) selectVessel(Number(li.dataset.mmsi));
+  });
+  $('f-search').addEventListener('input', renderList);
+  $('f-type').addEventListener('change', () => loadVessels().catch(onFail));
+  $('r-go').addEventListener('click', estimateRoute);
+
+  const onFail = (err) => setStatus('Error: ' + err.message);
+
+  loadPorts()
+    .then(loadVessels)
+    .catch(onFail);
+  setInterval(() => loadVessels().catch(onFail), REFRESH_MS);
+})();
+</script>
+</body>
+</html>
