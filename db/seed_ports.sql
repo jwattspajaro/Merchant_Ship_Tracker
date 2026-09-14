@@ -106,7 +106,20 @@ INSERT INTO ports (unlocode, name, country, lat, lon, approach_radius_m) VALUES
 -- Centro y Sudamerica
 ('PABLB', 'Balboa',                'PA',   8.9500,  -79.5600, 10000),
 ('PACOL', 'Colon',                 'PA',   9.3600,  -79.9000, 10000),
-('COCTG', 'Cartagena',             'CO',  10.4000,  -75.5200,  8000),
+-- Colombia, Caribe y Pacifico. Contecar y Mamonal son terminales DENTRO de la
+-- bahia de Cartagena: a este nivel de detalle (radio de aproximacion, no
+-- poligono de muelle) caen dentro del propio puerto de Cartagena y no se
+-- modelan aparte. Distinguirlos exige poligonos reales, la mejora con PostGIS.
+('COCTG', 'Cartagena',             'CO',  10.4000,  -75.5200, 10000),
+('COBUN', 'Buenaventura',          'CO',   3.8930,  -77.0740,  8000),
+('COBAQ', 'Barranquilla',          'CO',  10.9950,  -74.7800,  8000),
+('COSMR', 'Santa Marta',           'CO',  11.2470,  -74.2200,  8000),
+('COPBO', 'Puerto Bolivar',        'CO',  12.2280,  -71.9800,  8000),
+('COTRB', 'Turbo',                 'CO',   8.0950,  -76.7300,  8000),
+('COCVE', 'Covenas',               'CO',   9.4050,  -75.6800, 10000),
+('COTCO', 'Tumaco',                'CO',   1.8200,  -78.7600,  8000),
+('COADZ', 'San Andres',            'CO',  12.5850,  -81.7000,  8000),
+('COCIE', 'Cienaga',               'CO',  11.0100,  -74.2500,  8000),
 ('PECLL', 'Callao',                'PE', -12.0500,  -77.1500,  8000),
 ('CLVAP', 'Valparaiso',            'CL', -33.0300,  -71.6200,  8000),
 ('CLSAI', 'San Antonio',           'CL', -33.5900,  -71.6200,  8000),

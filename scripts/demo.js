@@ -11,7 +11,7 @@ import { query, withTransaction, closePool } from '../src/db.js';
 import { loadPortIndex } from '../src/core/portIndex.js';
 import { processPosition } from '../src/core/callDetector.js';
 import { ensurePartitions } from '../src/jobs/partitions.js';
-import { interpolateGreatCircle } from '../src/lib/geo.js';
+import { findSeaRoute } from '../src/core/seaRoute.js';
 
 const HOUR = 3600_000;
 
@@ -19,6 +19,8 @@ const HOUR = 3600_000;
 const ROUTES = [
   { from: 'NLRTM', to: 'DEHAM', voyages: 3, hours: [18, 30, 20] },
   { from: 'SGSIN', to: 'HKHKG', voyages: 3, hours: [62, 55, 70] },
+  { from: 'COCTG', to: 'NLRTM', voyages: 3, hours: [372, 400, 385] },
+  { from: 'COBUN', to: 'CNSHA', voyages: 2, hours: [700, 730] },
   { from: 'ESALG', to: 'ESVLC', voyages: 2, hours: [26, 31] },
   { from: 'USLAX', to: 'JPYOK', voyages: 1, hours: [240] },
 ];
@@ -33,6 +35,47 @@ const SHIPS = [
   { mmsi: 219900007, name: 'DEMO NORDIC', type: 89 },
   { mmsi: 416900008, name: 'DEMO PACIFIC', type: 70 },
 ];
+
+/**
+ * Reparte `target` puntos a lo largo de una polilinea, repartidos por distancia
+ * y no por vertice: si no, los tramos largos de oceano abierto se quedarian con
+ * dos puntos y los recodos de los canales con veinte.
+ */
+function densify(points, target) {
+  const segLen = [];
+  let total = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const d = Math.hypot(points[i][0] - points[i - 1][0], angleDelta(points[i][1], points[i - 1][1]));
+    segLen.push(d);
+    total += d;
+  }
+  if (total === 0) return [points[0], points[points.length - 1]];
+
+  const out = [];
+  for (let k = 0; k < target; k += 1) {
+    let want = (total * k) / (target - 1);
+    let i = 0;
+    while (i < segLen.length - 1 && want > segLen[i]) {
+      want -= segLen[i];
+      i += 1;
+    }
+    const t = segLen[i] === 0 ? 0 : want / segLen[i];
+    const lat = points[i][0] + (points[i + 1][0] - points[i][0]) * t;
+    let lon = points[i][1] + angleDelta(points[i + 1][1], points[i][1]) * t;
+    if (lon > 180) lon -= 360;
+    if (lon < -180) lon += 360;
+    out.push([lat, lon]);
+  }
+  return out;
+}
+
+/** Diferencia de longitudes por el camino corto. */
+function angleDelta(to, from) {
+  let d = to - from;
+  if (d > 180) d -= 360;
+  if (d < -180) d += 360;
+  return d;
+}
 
 async function main() {
   // Arrancamos hace 40 dias para que quepan varios viajes seguidos, asi que
@@ -83,13 +126,15 @@ async function main() {
       positions += 1;
       t = new Date(t.getTime() + 5 * HOUR);
 
-      // Travesia por el gran circulo, un punto cada ~2 h.
-      const steps = Math.max(8, Math.round(transitHours / 2));
-      for (let i = 0; i <= steps; i += 1) {
-        const f = 0.06 + (0.88 * i) / steps;
-        const [lat, lon] = interpolateGreatCircle(a.lat, a.lon, b.lat, b.lon, f);
-        const at = new Date(t.getTime() + (transitHours * HOUR * i) / steps);
-        await feed(ship.mmsi, lat, lon, at, 13.5, 'under way using engine');
+      // Travesia por el camino de mar real: rodea continentes y pasa por los
+      // canales. Antes se interpolaba un gran circulo y los buques de la demo
+      // atravesaban Africa como si fueran aviones.
+      const leg = findSeaRoute(a.lat, a.lon, b.lat, b.lon);
+      if (!leg) throw new Error(`Sin ruta por mar entre ${route.from} y ${route.to}`);
+      const track = densify(leg.points, Math.max(10, Math.round(transitHours / 3)));
+      for (let i = 0; i < track.length; i += 1) {
+        const at = new Date(t.getTime() + (transitHours * HOUR * i) / (track.length - 1));
+        await feed(ship.mmsi, track[i][0], track[i][1], at, 13.5, 'under way using engine');
         positions += 1;
       }
       t = new Date(t.getTime() + transitHours * HOUR);
@@ -101,8 +146,9 @@ async function main() {
       // El ultimo viaje de cada ruta se queda en puerto; los demas zarpan de
       // vuelta para que haya tambien tramos en curso que mirar.
       if (v < route.voyages - 1) {
-        const [lat, lon] = interpolateGreatCircle(b.lat, b.lon, a.lat, a.lon, 0.15);
-        await feed(ship.mmsi, lat, lon, new Date(t.getTime() + 9 * HOUR), 12.8, 'under way using engine');
+        const back = findSeaRoute(b.lat, b.lon, a.lat, a.lon);
+        const early = densify(back.points, 6)[2];
+        await feed(ship.mmsi, early[0], early[1], new Date(t.getTime() + 9 * HOUR), 12.8, 'under way using engine');
         positions += 1;
       }
     }

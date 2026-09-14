@@ -90,6 +90,7 @@
   .pill.berth { color: #06121d; background: var(--port); border-color: transparent; }
   .pill.anchorage { color: #06121d; background: var(--warn); border-color: transparent; }
   .pill.historical { color: #06121d; background: var(--port); border-color: transparent; }
+  .pill.sea_route { color: #06121d; background: var(--accent); border-color: transparent; }
   .pill.great_circle { color: var(--warn); border-color: var(--warn); }
 
   .note { font-size: 12px; color: var(--ink-faint); margin-top: 10px; line-height: 1.45; }
@@ -265,7 +266,7 @@
 
   async function loadVessels() {
     const type = $('f-type').value;
-    vessels = (await api('/vessels?limit=500' + (type ? '&type=' + type : ''))).vessels;
+    vessels = (await api('/vessels?limit=1000' + (type ? '&type=' + type : ''))).vessels;
     drawVessels();
     renderList();
     setStatus(vessels.length + ' buques · ' + new Date().toLocaleTimeString());
@@ -294,7 +295,7 @@
       !q || String(v.mmsi).includes(q) || (v.name || '').toLowerCase().includes(q));
 
     $('vessel-list').innerHTML = shown.length
-      ? shown.slice(0, 200).map((v) =>
+      ? shown.map((v) =>
           '<li data-mmsi="' + v.mmsi + '" aria-current="' + (v.mmsi === selectedMmsi) + '">' +
             '<div class="nm">' + esc(v.name || 'Sin nombre') + '</div>' +
             '<div class="meta">' + esc(v.ship_type_label) + ' · ' + v.mmsi +
@@ -311,9 +312,6 @@
     const box = $('vessel-detail');
     box.innerHTML = '<div class="empty">Consultando…</div>';
 
-    const marker = markers.get(mmsi);
-    if (marker) map.setView(marker.getLatLng(), Math.max(map.getZoom(), 6));
-
     const days = Number($('f-track').value);
     try {
       const [dwell, leg, track] = await Promise.all([
@@ -322,16 +320,26 @@
         days > 0 ? api('/vessels/' + mmsi + '/track?days=' + days) : Promise.resolve(null)
       ]);
       box.innerHTML = renderVessel(dwell, leg, track);
-      drawTrack(track);
+
+      // Una sola operacion sobre el mapa. Encuadrar el buque primero y la traza
+      // despues lanzaba el fitBounds en mitad de la animacion de zoom del
+      // setView, y Leaflet lo descartaba: la traza acababa fuera de pantalla.
+      const marker = markers.get(mmsi);
+      if (!drawTrack(track) && marker) {
+        map.setView(marker.getLatLng(), Math.max(map.getZoom(), 6));
+      }
     } catch (err) {
       box.innerHTML = '<div class="empty">No se pudo consultar: ' + esc(err.message) + '</div>';
     }
   }
 
-  /** Traza real del buque. Se encuadra sobre ella: es lo que se ha pedido ver. */
+  /**
+   * Traza real del buque. Se encuadra sobre ella: es lo que se ha pedido ver.
+   * Devuelve true si movio el mapa, para que quien llama no lo mueva otra vez.
+   */
   function drawTrack(track) {
     trackLayer.clearLayers();
-    if (!track || track.track.length < 2) return;
+    if (!track || track.track.length < 2) return false;
 
     const path = unwrapLongitudes(track.track);
     L.polyline(path, { color: TRACK_COLOR, weight: 2, opacity: .85 }).addTo(trackLayer);
@@ -341,6 +349,7 @@
     }).bindPopup('Inicio del recorrido<br>' + when(track.track[0][2])).addTo(trackLayer);
 
     map.fitBounds(L.latLngBounds(path).pad(0.2));
+    return true;
   }
 
   function renderVessel(dwell, leg, track) {
@@ -449,13 +458,16 @@
     try {
       const r = await api('/routes/' + o + '/' + d);
       const historical = r.source === 'historical';
-      const color = historical ? '#7ee787' : '#f0b429';
+      const seaRoute = r.source === 'sea_route';
+      // Verde: traza real observada. Azul: camino por mar calculado.
+      // Ambar discontinuo: linea recta, el ultimo recurso.
+      const color = historical ? '#7ee787' : seaRoute ? '#4ea8de' : '#f0b429';
 
       if (r.path_points.length) {
         const path = unwrapLongitudes(r.path_points);
         L.polyline(path, {
           color, weight: 3, opacity: .9,
-          dashArray: historical ? null : '7 7'   // discontinua = no observada
+          dashArray: historical || seaRoute ? null : '7 7'   // discontinua = no navegable
         }).addTo(routeLayer);
         map.fitBounds(L.latLngBounds(path).pad(0.15));
       }
@@ -464,8 +476,9 @@
       box.innerHTML =
         '<div class="card"><h3>' + esc(r.origin.name) + ' → ' + esc(r.destination.name) +
           ' <span class="pill ' + r.source + '">' +
-            (historical ? 'histórica' : 'gran círculo') + '</span></h3><dl>' +
+            (historical ? 'histórica' : seaRoute ? 'por mar' : 'línea recta') + '</span></h3><dl>' +
           '<dt>Tramos usados</dt><dd>' + r.legs_considered + '</dd>' +
+          (r.distance_nm ? '<dt>Distancia</dt><dd>' + r.distance_nm.toLocaleString() + ' NM</dd>' : '') +
           '<dt>Duración típica</dt><dd>' + hours(r.transit_seconds) + '</dd>' +
           '<dt>Media</dt><dd>' + hours(s.avg_transit_seconds) + '</dd>' +
           '<dt>Mín / Máx</dt><dd>' + hours(s.min_transit_seconds) + ' / ' +
@@ -474,10 +487,13 @@
         (historical
           ? '<p class="note">Traza real del viaje cuya duración está más cerca de la mediana. ' +
             'No es un promedio de caminos.</p>'
-          : '<p class="note"><strong>No es una ruta navegable.</strong> Es la línea más ' +
-            'corta sobre la esfera entre los dos puertos, y como tal puede cruzar ' +
-            'tierra, hielo o aguas cerradas. Sirve para orientar, no para navegar. ' +
-            esc(r.transit_note || '') + '</p>') +
+          : seaRoute
+          ? '<p class="note">Camino navegable calculado: rodea los continentes y pasa por ' +
+            'canales y estrechos reales. Ningún buque lo recorrió todavía. ' +
+            esc(r.transit_note || '') + '</p>' +
+            '<p class="note">' + esc(r.routing_note || '') + '</p>'
+          : '<p class="note"><strong>No es una ruta navegable.</strong> ' +
+            esc(r.routing_note || '') + ' ' + esc(r.transit_note || '') + '</p>') +
         '</div>';
     } catch (err) {
       box.innerHTML = '<div class="empty">' + esc(err.message) + '</div>';

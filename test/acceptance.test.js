@@ -248,14 +248,20 @@ test(
 
     // --- Criterio 4: great_circle con < 3 tramos, historical con >= 3 ------
 
-    await t.test('con 1 tramo historico la ruta es de gran circulo', async () => {
+    // NOTA: la especificacion original pedia 'great_circle' aqui. Se cambio por
+    // decision expresa posterior: una linea de gran circulo entre dos puertos es
+    // la ruta de un avion y cruza continentes. Ahora se calcula un camino
+    // navegable y 'great_circle' queda solo como ultimo recurso si el enrutado
+    // falla. El umbral de 3 tramos para pasar a historica no ha cambiado.
+    await t.test('con 1 tramo historico la ruta se calcula por mar', async () => {
       const route = await estimateRoute(rotterdam.id, hamburg.id);
-      assert.equal(route.source, 'great_circle');
+      assert.equal(route.source, 'sea_route');
       assert.equal(route.legs_considered, 1);
       assert.equal(route.transit_seconds, null);
       assert.ok(route.transit_note.includes('3 tramos'));
-      assert.equal(route.path_points.length, 22);
-      for (const p of route.path_points) assert.equal(p.length, 2, 'el gran circulo no lleva marca de tiempo');
+      assert.ok(route.distance_nm > 0);
+      assert.ok(route.routing_note.includes('rejilla de mar'));
+      for (const p of route.path_points) assert.equal(p.length, 2, 'el camino calculado no lleva marca de tiempo');
       assert.ok(Math.abs(route.path_points[0][0] - rotterdam.lat) < 1e-9);
       assert.ok(Math.abs(route.path_points.at(-1)[1] - hamburg.lon) < 1e-9);
     });
@@ -265,9 +271,9 @@ test(
     await addVessel(MMSI_B, 'TEST CARGO B', 71);
     await addVessel(MMSI_C, 'TEST TANKER C', 80);
     const voyageB = await sailRotterdamToHamburg(MMSI_B, new Date(base.getTime() + 24 * HOUR), 30);
-    await t.test('con 2 tramos historicos sigue siendo de gran circulo', async () => {
+    await t.test('con 2 tramos historicos sigue sin ser historica', async () => {
       const route = await estimateRoute(rotterdam.id, hamburg.id);
-      assert.equal(route.source, 'great_circle');
+      assert.equal(route.source, 'sea_route');
       assert.equal(route.legs_considered, 2);
     });
 
@@ -294,7 +300,7 @@ test(
 
     await t.test('la ruta inversa todavia no tiene historico propio', async () => {
       const back = await estimateRoute(hamburg.id, rotterdam.id);
-      assert.equal(back.source, 'great_circle');
+      assert.equal(back.source, 'sea_route');
       assert.equal(back.legs_considered, 0);
       assert.equal(back.transit_stats.legs, 0);
     });

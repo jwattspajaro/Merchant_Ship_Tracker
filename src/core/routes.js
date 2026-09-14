@@ -1,6 +1,7 @@
 import { query } from '../db.js';
-import { greatCirclePath } from '../lib/geo.js';
+import { greatCirclePath, metersToNauticalMiles } from '../lib/geo.js';
 import { getPort, getTransitStats } from './analytics.js';
+import { findSeaRoute, MAX_ROUTING_LATITUDE } from './seaRoute.js';
 
 // Numero minimo de tramos historicos cerrados para el mismo par de puertos a
 // partir del cual la ruta se considera "aprendida" (seccion 4.5).
@@ -66,12 +67,37 @@ export async function estimateRoute(originPortId, destinationPortId) {
     };
   }
 
+  // Sin histórico suficiente se calcula un camino por mar: rodea los
+  // continentes y pasa por los canales y estrechos reales. No es lo que hizo
+  // ningun buque, pero al menos es navegable.
+  const missing = `Sin duracion estimada: hacen falta ${MIN_LEGS_FOR_HISTORICAL} tramos historicos cerrados para este par de puertos y hay ${usable.length}.`;
+
+  const sea = safeSeaRoute(origin, destination);
+  if (sea) {
+    return {
+      ...base,
+      source: 'sea_route',
+      legs_considered: usable.length,
+      // path_points: [[lat, lon], ...] -- sin marca de tiempo: es un camino
+      // calculado, no un recorrido observado.
+      path_points: sea.points,
+      distance_nm: Number(metersToNauticalMiles(sea.meters).toFixed(1)),
+      transit_seconds: null,
+      transit_note: missing,
+      routing_note:
+        'Camino navegable calculado sobre una rejilla de mar de 0,25 grados (~28 km). ' +
+        `No modela hielo ni estacionalidad (no enruta por encima de ${MAX_ROUTING_LATITUDE} grados), ` +
+        'ni calado, restricciones de canal, separacion de trafico o zonas de riesgo. ' +
+        'En travesias cortas por pasos estrechos el error relativo es mayor.',
+    };
+  }
+
+  // Ultimo recurso: la rejilla no encontro camino (punto encerrado en agua
+  // interior, o la rejilla no esta generada). Se dice lo que es.
   return {
     ...base,
     source: 'great_circle',
     legs_considered: usable.length,
-    // path_points: [[lat, lon], ...] -- sin marca de tiempo: es una linea
-    // geometrica, no un recorrido observado.
     path_points: greatCirclePath(
       origin.lat,
       origin.lon,
@@ -80,8 +106,21 @@ export async function estimateRoute(originPortId, destinationPortId) {
       GREAT_CIRCLE_INTERMEDIATE_POINTS,
     ),
     transit_seconds: null,
-    transit_note: `Sin duracion estimada: hacen falta ${MIN_LEGS_FOR_HISTORICAL} tramos historicos cerrados para este par de puertos y hay ${usable.length}.`,
+    transit_note: missing,
+    routing_note:
+      'NO ES UNA RUTA NAVEGABLE: no se pudo calcular un camino por mar entre estos dos puertos, ' +
+      'asi que esto es la linea recta sobre la esfera y puede cruzar tierra.',
   };
+}
+
+/** El enrutado no debe tumbar la API: si falla, se cae al gran circulo. */
+function safeSeaRoute(origin, destination) {
+  try {
+    return findSeaRoute(origin.lat, origin.lon, destination.lat, destination.lon);
+  } catch (err) {
+    console.error('[routes] enrutado maritimo no disponible:', err.message);
+    return null;
+  }
 }
 
 /** El tramo cuya duracion mas se acerca a la mediana del conjunto. */

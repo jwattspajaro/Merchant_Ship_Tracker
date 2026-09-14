@@ -60,9 +60,10 @@ en `localhost`, así que un visor externo no funcionaría.
   últimos 7, 30 o 90 días, con la distancia navegada. Solo muestra lo observado:
   si el sistema lleva menos tiempo en marcha que la ventana pedida, o las
   posiciones ya pasaron el horizonte de retención, la ficha lo dice.
-- **Rutas** — eliges dos puertos y dibuja la ruta estimada. Línea continua verde
-  si es histórica, discontinua ámbar si es gran círculo; el panel dice cuál es y
-  por qué.
+- **Rutas** — eliges dos puertos y dibuja la ruta estimada. Verde continua si es
+  la traza histórica de un viaje real, azul continua si es un camino por mar
+  calculado, ámbar discontinua si es una recta no navegable. El panel dice cuál
+  es y por qué.
 - Los círculos verdes son los radios de aproximación: el "puerto", para este
   sistema, es ese círculo y no un punto.
 - Se refresca cada 30 s.
@@ -154,12 +155,53 @@ Para un par (origen, destino):
   tramo cuya duración está más cerca de la mediana, junto con su
   `transit_seconds`. No se promedian trazas: la media de varios caminos produce
   rutas que ningún buque recorrió.
-- **< 3 tramos** → `source: "great_circle"`. Línea de gran círculo entre
-  centroides (20 puntos intermedios) y `transit_seconds: null`, con
-  `transit_note` explicando cuántos tramos faltan.
+- **< 3 tramos** → `source: "sea_route"`. Camino navegable calculado (abajo), con
+  `distance_nm` y `transit_seconds: null`.
+- **Si el enrutado falla** → `source: "great_circle"`, con un `routing_note` que
+  dice en mayúsculas que no es navegable. Es el último recurso.
 
-En `historical` cada punto es `[lat, lon, timestamp]`; en `great_circle` es
-`[lat, lon]` — una línea geométrica no tiene horas.
+En `historical` cada punto es `[lat, lon, timestamp]`; en los otros dos es
+`[lat, lon]` — un camino calculado no tiene horas.
+
+> La especificación original pedía gran círculo cuando faltan tramos. Se cambió
+> por decisión posterior: una recta entre dos puertos es la ruta de un avión y
+> cruza continentes. El umbral de 3 tramos para pasar a histórica no cambió.
+
+### 5. Enrutado marítimo (`src/core/seaRoute.js`)
+
+`data/sea-grid.bin` (127 KB) es una máscara de bits del mar navegable a 0,25°
+(~28 km), generada de los polígonos de tierra de Natural Earth (dominio público)
+con `scripts/build-sea-grid.js`. Sobre ella corre un A\* con heurística de
+distancia de gran círculo.
+
+Tres cosas que el generador hace y verifica, en vez de suponer:
+
+1. **Abre a mano los pasos más estrechos que una celda**: Panamá, Suez y todo el
+   golfo de Suez, Gibraltar, Bósforo, estrechos daneses, Bab el-Mandeb, Ormuz,
+   Malaca, Magallanes, Sunda y el Canal de la Mancha.
+2. **Se queda solo con el océano conectado**, así el Caspio y los Grandes Lagos
+   no aparecen como mar y cualquier par de celdas tiene camino garantizado.
+3. **Comprueba que cada paso es transitable, no solo que el mar esté conectado.**
+   Esa distinción importa: con el golfo de Suez cerrado, el Mar Rojo seguía
+   conectado por Bab el-Mandeb y el Mediterráneo por Gibraltar —ambos daban
+   "OK"— mientras un Dubái–Rotterdam se iba por el Cabo de Buena Esperanza. El
+   generador falla si un paso no es transitable.
+
+Las distancias salen dentro del 3 % de las tablas náuticas en travesías largas
+(Rotterdam–Shanghái 10.499 NM frente a ~10.500; Nueva York–Los Ángeles 4.897 por
+Panamá). En travesías cortas por pasos estrechos el error relativo es mayor
+(Cartagena–Buenaventura da 624 NM frente a ~480): la rejilla obliga a rodeos que
+un buque real no da.
+
+**Lo que NO modela**, y conviene tener presente antes de usarlo para nada serio:
+hielo y estacionalidad, calado, restricciones y peajes de canal, separación de
+tráfico, zonas de guerra o piratería. Es un camino navegable por geometría, no un
+plan de viaje.
+
+Por defecto no enruta por encima de **70° de latitud**. Sin ese tope, el camino
+más corto de Rotterdam a Singapur sale por la Ruta del Mar del Norte (9.100 NM
+frente a 8.300 por Suez): navegable en verano, pero no es por donde va el
+tráfico mercante. Súbelo con `SEA_ROUTE_MAX_LAT` si quieres rutas árticas.
 
 ---
 
@@ -174,7 +216,7 @@ En `historical` cada punto es `[lat, lon, timestamp]`; en `great_circle` es
 | GET | `/vessels/:mmsi/cargo-operations` | **501** — no disponible en esta fase, con el porqué |
 | GET | `/ports` | Puertos de referencia. `?q=` para buscar |
 | GET | `/ports/:id/dwell-stats` | Permanencia media, mediana, mín. y máx. por `call_type` |
-| GET | `/routes/:originPortId/:destinationPortId` | Ruta estimada + estadísticas de tránsito |
+| GET | `/routes/:originPortId/:destinationPortId` | Ruta estimada (`historical` / `sea_route` / `great_circle`) + estadísticas |
 | GET | `/health` | Estado del proceso y de la base de datos |
 
 Ejemplo:
@@ -271,15 +313,13 @@ npm run job:retention
   salta del radio de un puerto directamente al de otro entre dos posiciones, se
   registra un tramo de duración cero: es el reflejo honesto de que los radios se
   tocan o de que las posiciones llegaron muy espaciadas.
-- **La ruta de gran círculo no es navegable.** Cuando no hay 3 tramos observados
-  para un par de puertos, la especificación manda devolver una línea de gran
-  círculo entre centroides: la distancia más corta sobre la esfera, que es la
-  ruta de un avión, no la de un barco. Puede cruzar continentes. El visor lo
-  advierte de forma explícita y la API devuelve `source: "great_circle"` para que
-  nadie la confunda con una ruta real. En cuanto hay 3 tramos observados, la ruta
-  pasa a ser la traza real de un viaje y sí sigue el mar. Resolverlo de verdad
-  exige enrutado marítimo sobre un grafo que evite tierra y respete canales y
-  estrechos; no está en este alcance.
+- **El enrutado marítimo es geométrico, no náutico.** Evita tierra y usa los
+  canales, pero ignora hielo, calado, tráfico y restricciones. A 28 km de celda,
+  una travesía corta por un paso estrecho puede desviarse un 30 %.
+- **La carga que lleva un buque no está en el AIS.** Ni contenedores, ni
+  manifiesto, ni consignatario. El AIS da posición, rumbo, velocidad y estado de
+  navegación, y nada más. Buscar "el contenedor que va en tal barco" exige el
+  TOS/EDI del operador de terminal o un proveedor de hitos de contenedor.
 - **Los centroides del seed son aproximados** (~1–3 km), suficiente para radios de
   8–15 km. Sustitúyelos por un dataset UN/LOCODE propio si necesitas precisión.
 - **La bandera se deriva del MID del MMSI**, no la transmite el AIS. Un MID fuera
@@ -308,6 +348,9 @@ src/core/portIndex.js    Índice de puertos en memoria, clasificación berth/anc
 src/core/callDetector.js Máquina de estados de escalas y tramos (4.2)
 src/core/analytics.js    Permanencia y tránsito (4.4)
 src/core/routes.js       Estimación de rutas (4.5)
+src/core/seaRoute.js     Enrutado marítimo A* sobre rejilla de mar
+data/sea-grid.bin        Máscara de mar navegable (127 KB, generada)
+scripts/build-sea-grid.js  Genera la rejilla desde Natural Earth
 src/core/cargoOperations.js  Lo que el AIS no da (4.3)
 src/ingest/aisstream.js  Capa de proveedor — el único archivo que cambia
 src/ingest/index.js      Pipeline: filtro, cola, volcado por lotes
@@ -315,6 +358,7 @@ src/api/server.js        API de consulta + servidor del visor
 public/index.html        Visor de mapa (Leaflet, sin build)
 src/jobs/                Particiones, retención, planificador
 scripts/demo.js          Datos ficticios para probar el visor
+test/searoute.test.js    Enrutado: no cruza tierra, usa canales, distancias
 test/unit.test.js        Lógica pura
 test/acceptance.test.js  Criterios de aceptación de la sección 8
 ```
