@@ -3,7 +3,7 @@
 Documento vivo. Marca las casillas según avances. Si retomas esto en otra
 sesión o lo coge otra persona, **empieza por "Cómo retomar"** al final.
 
-Última actualización: 2026-09-14.
+Última actualización: 2026-09-14. **Fase B terminada.** Fase A bloqueada a la espera de la cabecera real del fichero de declaraciones.
 
 ---
 
@@ -73,7 +73,7 @@ Marta, Puerto Bolívar, Turbo, Coveñas, Tumaco, San Andrés, Ciénaga.
 
 ---
 
-## Fase B — Huecos de cobertura AIS
+## Fase B — Huecos de cobertura AIS  ✅ TERMINADA
 
 **Por qué importa:** aisstream.io es AIS terrestre. Cubre bien las costas y mal
 el océano abierto. Un buque desaparece días en medio del Pacífico y reaparece al
@@ -82,58 +82,73 @@ además puede cruzar tierra, y la distancia sale corta.
 
 ### B1. Detectar el hueco
 
-- [ ] Umbral configurable `GAP_MIN_HOURS` (por defecto 6 h) en `src/config.js`.
-- [ ] Función en `src/core/gaps.js`: dadas dos posiciones consecutivas de un
+- [x] Umbral configurable `GAP_MIN_HOURS` (por defecto 6 h) en `src/config.js`.
+- [x] Función en `src/core/gaps.js`: dadas dos posiciones consecutivas de un
       buque, es hueco si `Δt > GAP_MIN_HOURS`.
-- [ ] Distinguir el hueco **en mar** del hueco **en puerto**: si ambas posiciones
+- [x] Distinguir el hueco **en mar** del hueco **en puerto**: si ambas posiciones
       caen en el radio del mismo puerto, no es un hueco de cobertura, es un buque
       amarrado que dejó de emitir. No reconstruir ese.
 
 ### B2. Reconstruir el trayecto
 
-- [ ] Ruta por mar entre la última posición conocida y la primera nueva, con
+- [x] Ruta por mar entre la última posición conocida y la primera nueva, con
       `findSeaRoute` (ya existe, ya verificado que no cruza tierra).
-- [ ] Velocidad media implícita = distancia de esa ruta ÷ Δt, en nudos.
-- [ ] Duración en días = Δt / 86400, que es como pidió expresarse.
-- [ ] Comparar la velocidad implícita contra la `sog` media observada del buque
+- [x] Velocidad media implícita = distancia de esa ruta ÷ Δt, en nudos.
+- [x] Duración en días = Δt / 86400, que es como pidió expresarse.
+- [x] Comparar la velocidad implícita contra la `sog` media observada del buque
       antes y después del hueco.
 
 ### B3. Comprobar que es plausible
 
-- [ ] Rango plausible para mercantes: **1 a 25 nudos**. Fuera de ahí, marcar
+- [x] Rango plausible para mercantes: **1 a 25 nudos**. Fuera de ahí, marcar
       `plausible = false` y **no** dibujarlo como trayecto.
-- [ ] Una velocidad implícita imposible (>25 kn) no significa "barco rápido":
+- [x] Una velocidad implícita imposible (>25 kn) no significa "barco rápido":
       significa que en el hueco pasó algo más — una escala que no se detectó, un
       MMSI compartido o suplantado, o un salto de datos. Se registra como
       sospechoso y se deja a la vista.
-- [ ] Velocidad implícita muy baja (<1 kn) sobre una distancia grande: mismo
+- [x] Velocidad implícita muy baja (<1 kn) sobre una distancia grande: mismo
       tratamiento.
 
 ### B4. Guardarlo separado
 
-- [ ] Tabla `vessel_gap_segments`: `mmsi`, `gap_start`, `gap_end`,
+- [x] Tabla `vessel_gap_segments`: `mmsi`, `gap_start`, `gap_end`,
       `gap_seconds`, `gap_days`, `from_lat/lon`, `to_lat/lon`,
       `sea_route_nm`, `implied_speed_kn`, `plausible`, `path_points JSONB`.
-- [ ] **Nunca** insertar en `vessel_positions`.
-- [ ] Índice por `(mmsi, gap_start)`.
+- [x] **Nunca** insertar en `vessel_positions`.
+- [x] Índice por `(mmsi, gap_start)`.
 
 ### B5. Exponerlo sin confundirlo con lo real
 
-- [ ] `getVesselTrack` devuelve además `gaps: [...]` y
+- [x] `getVesselTrack` devuelve además `gaps: [...]` y
       `distance_nm_with_gaps`, **sin tocar** `distance_nm`, que sigue siendo
       solo lo observado.
-- [ ] El visor dibuja los tramos estimados **discontinuos y en otro color**, con
+- [x] El visor dibuja los tramos estimados **discontinuos y en otro color**, con
       etiqueta "tramo estimado — el buque no emitió".
-- [ ] La respuesta dice cuántas horas y millas son estimadas frente a observadas.
+- [x] La respuesta dice cuántas horas y millas son estimadas frente a observadas.
 
-### B6. Pruebas
+### B6. Pruebas (`test/gaps.test.js`, 8 pruebas)
 
-- [ ] Hueco en mar abierto: se reconstruye, la velocidad implícita es razonable.
-- [ ] Hueco dentro del radio de un puerto: **no** se reconstruye.
-- [ ] Velocidad implícita imposible: `plausible = false` y no se dibuja.
-- [ ] El trayecto reconstruido no cruza tierra (misma verificación que
+- [x] Hueco en mar abierto: se reconstruye, la velocidad implícita es razonable.
+- [x] Hueco dentro del radio de un puerto: **no** se reconstruye.
+- [x] Velocidad implícita imposible: `plausible = false` y no se dibuja.
+- [x] El trayecto reconstruido no cruza tierra (misma verificación que
       `test/searoute.test.js`).
-- [ ] `distance_nm` sigue contando solo lo observado.
+- [x] `distance_nm` sigue contando solo lo observado.
+
+**Decisión tomada al implementar:** los huecos se calculan **al vuelo** en
+`getVesselTrack`, no se persisten. La tabla `vessel_gap_segments` y `saveGaps()`
+existen para cuando haga falta analítica masiva sobre huecos, pero mientras se
+consulten de uno en uno es preferible calcularlos: nunca quedan obsoletos si
+llegan posiciones atrasadas que rellenan el hueco.
+
+**Fallos encontrados y corregidos durante la Fase B:**
+- `db/schema.sql` definía `port_call_durations` dos veces; la segunda intentaba
+  quitar columnas y `CREATE OR REPLACE VIEW` no puede, así que reaplicar el
+  esquema sobre una base ya migrada fallaba.
+- La demo generaba posiciones con **fecha futura** en los buques de travesías
+  largas, y quedaban fuera de cualquier consulta de "últimos N días".
+- El visor desenrollaba las longitudes del hueco en un marco distinto al de la
+  traza; al juntarlos para encuadrar, la caja abarcaba el mundo y no se veía nada.
 
 ---
 

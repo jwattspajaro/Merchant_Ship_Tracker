@@ -396,6 +396,37 @@ conocidos.
 
 ---
 
+## Huecos de cobertura AIS
+
+aisstream.io es AIS terrestre: cubre bien las costas y mal el océano abierto. Un
+buque puede desaparecer días en mitad del Pacífico y reaparecer al acercarse a
+tierra.
+
+Cuando pasan más de `GAP_MIN_HOURS` (6 por defecto) sin una sola posición, el
+sistema reconstruye por dónde pudo ir sobre la ruta marítima y deduce la
+velocidad media que eso implica:
+
+```
+sin emitir      : 5.02 días
+ruta por mar    : 1592.1 NM
+velocidad media : 13.23 kn   -> plausible
+```
+
+Tres reglas que hacen que esto no contamine nada:
+
+- **Un buque amarrado que deja de emitir no es un hueco de cobertura.** Si las dos
+  posiciones caen en el radio del mismo puerto, no se reconstruye nada:
+  reconstruirlo sería inventarse un viaje.
+- **Fuera de 1–25 nudos se marca `plausible: false` y no se dibuja.** Una
+  velocidad imposible no significa "buque rápido": significa que en el hueco pasó
+  algo más — una escala no detectada, un MMSI compartido o suplantado, un salto
+  de datos. Se registra y se deja a la vista.
+- **`distance_nm` sigue contando solo lo observado.** Lo reconstruido va aparte en
+  `estimated_distance_nm` y `distance_nm_with_gaps`, y en el visor se dibuja
+  discontinuo y en ámbar. Nada estimado entra nunca en `vessel_positions`.
+
+---
+
 ## Trabajo pendiente
 
 El plan de las dos fases siguientes —cargar declaraciones aduaneras como segunda

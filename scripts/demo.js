@@ -82,11 +82,12 @@ function angleDelta(to, from) {
 }
 
 async function main() {
-  // Arrancamos hace 40 dias para que quepan varios viajes seguidos, asi que
-  // hace falta tambien la particion de ese mes, no solo las del mes en curso.
-  const origin = new Date(Date.now() - 40 * 24 * HOUR);
-  await ensurePartitions(origin);
-  await ensurePartitions();
+  // La travesia mas larga de la flota marca cuanto hay que retroceder, y con
+  // ello que particiones mensuales hacen falta.
+  const maxHours = Math.max(...FLEET.map((s) => s.hours.reduce((a, b) => a + b, 0) * 2 + 100));
+  for (let back = 0; back <= Math.ceil(maxHours / 24 / 28) + 1; back += 1) {
+    await ensurePartitions(new Date(Date.now() - back * 28 * 24 * HOUR));
+  }
 
   const portIndex = await loadPortIndex();
   if (portIndex.size === 0) throw new Error('No hay puertos: ejecuta "npm run seed" primero.');
@@ -125,7 +126,18 @@ async function main() {
     const a = portOf(ship.from);
     const b = portOf(ship.to);
     shipIdx += 1;
-    let t = new Date(origin.getTime() + shipIdx * 6 * HOUR);
+
+    // Cada buque arranca lo bastante atras para que TODA su historia quepa
+    // antes de ahora. Con un origen comun, los buques de travesias largas
+    // (700 h por viaje) generaban posiciones con fecha futura, que despues
+    // quedaban fuera de cualquier consulta de "ultimos N dias".
+    let totalHours = 0;
+    for (let v = 0; v < ship.voyages; v += 1) {
+      const h = ship.hours[v % ship.hours.length];
+      totalHours += h + 16; // travesia + tiempo en puerto
+      if (v < ship.voyages - 1) totalHours += Math.round(h * 0.95) + 16;
+    }
+    let t = new Date(Date.now() - (totalHours + shipIdx * 6) * HOUR);
 
     // El calado va cambiando: zarpa cargado y descarga al llegar. Es lo que
     // luego se lee como draught_delta en cada escala.

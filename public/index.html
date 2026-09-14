@@ -18,6 +18,7 @@
     --tanker: #f4a259;
     --port: #7ee787;
     --track: #c77dff;
+    --gap: #f0b429;
     --accent: #4ea8de;
     --warn: #f0b429;
   }
@@ -139,6 +140,7 @@
     <span><i style="background:var(--tanker)"></i>Tanker</span>
     <span><i style="background:var(--port)"></i>Puerto</span>
     <span><i style="background:var(--track)"></i>Recorrido</span>
+    <span><i style="background:var(--gap)"></i>Tramo estimado</span>
   </div>
 
   <div class="tabs" role="tablist">
@@ -195,6 +197,7 @@
   // Leaflet pinta en SVG con atributos, no con CSS, asi que el color del
   // recorrido se repite aqui. Debe coincidir con --track de la hoja de estilos.
   const TRACK_COLOR = '#c77dff';
+  const GAP_COLOR = '#f0b429';
   const $ = (id) => document.getElementById(id);
   const statusEl = $('status');
 
@@ -348,7 +351,26 @@
       radius: 4, color: TRACK_COLOR, fillColor: '#0e1620', fillOpacity: 1, weight: 2
     }).bindPopup('Inicio del recorrido<br>' + when(track.track[0][2])).addTo(trackLayer);
 
-    map.fitBounds(L.latLngBounds(path).pad(0.2));
+    // Huecos de cobertura: discontinuos y en otro color. Son estimados, y a
+    // simple vista no deben confundirse con el recorrido observado.
+    const gapPaths = [];
+    for (const gap of track.gaps || []) {
+      if (!gap.plausible || !gap.pathPoints) continue;
+      // Alineado al mismo marco que la traza: desenrollar cada trazado por su
+      // cuenta los deja en marcos distintos, y al juntarlos para encuadrar sale
+      // una caja que abarca el mundo entero y no se ve nada.
+      const gp = alignToFrame(unwrapLongitudes(gap.pathPoints), referenceLon(track, path, gap));
+      L.polyline(gp, { color: GAP_COLOR, weight: 2, opacity: .9, dashArray: '6 6' })
+        .bindPopup(
+          '<b>Tramo estimado</b><br>El buque no emitió durante ' + gap.gapDays.toFixed(1) + ' días.' +
+          '<br>Ruta por mar: ' + gap.seaRouteNm.toLocaleString() + ' NM' +
+          '<br>Velocidad media implícita: ' + gap.impliedSpeedKn + ' kn' +
+          '<br><i>Calculado, no observado.</i>')
+        .addTo(trackLayer);
+      gapPaths.push(...gp);
+    }
+
+    map.fitBounds(L.latLngBounds([...path, ...gapPaths]).pad(0.2));
     return true;
   }
 
@@ -405,6 +427,16 @@
             '<dt>Desde</dt><dd>' + when(track.observed_from) + '</dd>' +
             '<dt>Hasta</dt><dd>' + when(track.observed_to) + '</dd>' +
           '</dl>' +
+          (track.gaps && track.gaps.length
+            ? '<dl style="margin-top:8px">' +
+                '<dt>Huecos</dt><dd>' + track.gaps.length + '</dd>' +
+                '<dt>Horas sin emitir</dt><dd>' + track.estimated_hours + ' h</dd>' +
+                '<dt>Millas estimadas</dt><dd>' + track.estimated_distance_nm.toLocaleString() + ' NM</dd>' +
+              '</dl>' +
+              '<p class="note"><strong>Los tramos ámbar son estimados.</strong> ' +
+              'El buque dejó de emitir y se ha reconstruido por dónde pudo ir sobre la ruta ' +
+              'marítima. No son posiciones observadas y no cuentan en la distancia de arriba.</p>'
+            : '') +
           (track.downsampled
             ? '<p class="note">Dibujado con ' + track.points_returned +
               ' puntos de los ' + track.positions_in_window.toLocaleString() +
@@ -443,6 +475,28 @@
       out.push([points[i][0], points[i][1] + offset]);
     }
     return out;
+  }
+
+  /** Longitud (ya desenrollada) de la traza en el momento en que empieza el hueco. */
+  function referenceLon(track, path, gap) {
+    const target = new Date(gap.from.at).getTime();
+    let best = 0;
+    let bestDelta = Infinity;
+    for (let i = 0; i < track.track.length; i += 1) {
+      const d = Math.abs(new Date(track.track[i][2]).getTime() - target);
+      if (d < bestDelta) {
+        bestDelta = d;
+        best = i;
+      }
+    }
+    return path[Math.min(best, path.length - 1)][1];
+  }
+
+  /** Desplaza toda la polilinea un multiplo de 360 para acercarla a `reference`. */
+  function alignToFrame(points, reference) {
+    const k = Math.round((reference - points[0][1]) / 360);
+    if (k === 0) return points;
+    return points.map(([lat, lon]) => [lat, lon + k * 360]);
   }
 
   async function estimateRoute() {

@@ -1,6 +1,8 @@
 import { query } from '../db.js';
 import { config } from '../config.js';
 import { haversineMeters, metersToNauticalMiles, downsampleEvenly } from '../lib/geo.js';
+import { findGaps } from './gaps.js';
+import { loadPortIndex } from './portIndex.js';
 
 // Tope de filas crudas que se leen para un recorrido. A un minuto por posicion
 // (el intervalo por defecto de la ingesta) 30 dias son ~43.000 filas; el tope
@@ -137,7 +139,7 @@ export async function getPort(portId) {
  * a TRACK_MAX_POINTS es solo para lo que se manda al cliente. Medir sobre la
  * version recortada acortaria la distancia en cada curva.
  */
-export async function getVesselTrack(mmsi, { days = 30, maxPoints = TRACK_MAX_POINTS } = {}) {
+export async function getVesselTrack(mmsi, { days = 30, maxPoints = TRACK_MAX_POINTS, withGaps = true } = {}) {
   const to = new Date();
   const from = new Date(to.getTime() - days * 86_400_000);
 
@@ -161,6 +163,19 @@ export async function getVesselTrack(mmsi, { days = 30, maxPoints = TRACK_MAX_PO
   const points = rows.map((r) => [Number(r.lat), Number(r.lon), r.recorded_at.toISOString()]);
   const track = points.length > maxPoints ? downsampleEvenly(points, maxPoints) : points;
 
+  // Huecos de cobertura. Se calculan sobre las posiciones CRUDAS, no sobre el
+  // recorte: el recorte crea saltos artificiales que no son huecos reales.
+  let gaps = [];
+  if (withGaps && rows.length > 1) {
+    const portIndex = await loadPortIndex();
+    gaps = findGaps(
+      rows.map((r) => ({ lat: Number(r.lat), lon: Number(r.lon), recordedAt: r.recorded_at })),
+      portIndex,
+    );
+  }
+  const estimatedNm = gaps.reduce((sum, g) => sum + (g.plausible ? g.seaRouteNm : 0), 0);
+  const estimatedSeconds = gaps.reduce((sum, g) => sum + (g.plausible ? g.gapSeconds : 0), 0);
+
   // Horizonte de retencion: antes de esta fecha las posiciones crudas ya no
   // tienen por que existir, aunque el buque si navegara.
   const retentionHorizon = new Date(to.getTime() - config.retention.rawRetentionDays * 86_400_000);
@@ -172,12 +187,21 @@ export async function getVesselTrack(mmsi, { days = 30, maxPoints = TRACK_MAX_PO
     points_returned: track.length,
     downsampled: track.length < points.length,
     truncated: rows.length === TRACK_ROW_LIMIT,
+    // distance_nm cuenta SOLO lo observado. Lo reconstruido va aparte, a
+    // proposito: quien quiera el total lo suma sabiendo lo que suma.
     distance_nm: Number(metersToNauticalMiles(meters).toFixed(2)),
+    gaps,
+    estimated_distance_nm: Number(estimatedNm.toFixed(2)),
+    estimated_hours: Number((estimatedSeconds / 3600).toFixed(1)),
+    distance_nm_with_gaps: Number((metersToNauticalMiles(meters) + estimatedNm).toFixed(2)),
     observed_from: observedFrom,
     observed_to: rows.length ? rows.at(-1).recorded_at : null,
     // [[lat, lon, iso8601], ...]
     track,
     coverage_note: buildCoverageNote(rows.length, observedFrom, from, retentionHorizon, days),
+    gaps_note: gaps.length
+      ? `${gaps.length} hueco(s) de cobertura. Los tramos reconstruidos son ESTIMADOS sobre la ruta maritima, no posiciones observadas, y no entran en distance_nm.`
+      : null,
   };
 }
 

@@ -32,6 +32,12 @@ export const config = {
     minIntervalS: int(process.env.INGEST_MIN_INTERVAL_S, 60),
   },
 
+  gaps: {
+    // Horas sin una sola posicion a partir de las cuales se considera que hubo
+    // un hueco de cobertura y no simplemente un buque parado.
+    minHours: int(process.env.GAP_MIN_HOURS, 6),
+  },
+
   retention: {
     rawRetentionDays: int(process.env.RAW_RETENTION_DAYS, 90),
     maintenanceHour: int(process.env.MAINTENANCE_HOUR, 3),

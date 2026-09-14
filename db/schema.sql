@@ -54,12 +54,10 @@ CREATE INDEX IF NOT EXISTS idx_port_calls_port ON port_calls (port_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_port_calls_one_open_per_vessel
     ON port_calls (mmsi) WHERE departed_at IS NULL;
 
--- Nota: las columnas de calado se anaden a la vista mas abajo, despues de que
--- el ALTER TABLE las haya creado en port_calls.
-CREATE OR REPLACE VIEW port_call_durations AS
-SELECT id, mmsi, port_id, call_type, arrived_at, departed_at,
-       EXTRACT(EPOCH FROM (COALESCE(departed_at, now()) - arrived_at)) AS dwell_seconds
-FROM port_calls;
+-- La vista port_call_durations se define mas abajo, una sola vez y despues de
+-- que los ALTER TABLE hayan creado las columnas de calado. Definirla dos veces
+-- rompe la migracion: CREATE OR REPLACE VIEW no puede quitar columnas, asi que
+-- al reaplicar el esquema sobre una base ya migrada fallaba.
 
 CREATE TABLE IF NOT EXISTS route_legs (
     id                    BIGSERIAL PRIMARY KEY,
@@ -115,6 +113,33 @@ SELECT id, mmsi, port_id, call_type, arrived_at, departed_at,
        draught_on_departure,
        draught_on_departure - draught_on_arrival AS draught_delta_m
 FROM port_calls;
+
+-- ---------------------------------------------------------------------------
+-- Huecos de cobertura AIS (fase B del plan)
+--
+-- Cuando un buque deja de emitir y reaparece lejos, aqui se guarda por donde
+-- pudo ir y a que velocidad media. Tabla APARTE a proposito: esto es estimado,
+-- y vessel_positions es la tabla de lo observado. Mezclarlos envenenaria
+-- distancias, escalas y permanencias sin que se viera.
+CREATE TABLE IF NOT EXISTS vessel_gap_segments (
+    mmsi             BIGINT NOT NULL REFERENCES vessels(mmsi),
+    gap_start        TIMESTAMPTZ NOT NULL,
+    gap_end          TIMESTAMPTZ NOT NULL,
+    gap_seconds      INTEGER NOT NULL,
+    gap_days         DOUBLE PRECISION NOT NULL,
+    from_lat         DOUBLE PRECISION NOT NULL,
+    from_lon         DOUBLE PRECISION NOT NULL,
+    to_lat           DOUBLE PRECISION NOT NULL,
+    to_lon           DOUBLE PRECISION NOT NULL,
+    straight_nm      DOUBLE PRECISION,
+    sea_route_nm     DOUBLE PRECISION,
+    implied_speed_kn DOUBLE PRECISION,
+    plausible        BOOLEAN NOT NULL DEFAULT FALSE,
+    reason           TEXT,
+    path_points      JSONB,
+    PRIMARY KEY (mmsi, gap_start)
+);
+CREATE INDEX IF NOT EXISTS idx_gap_mmsi_start ON vessel_gap_segments (mmsi, gap_start DESC);
 
 CREATE TABLE IF NOT EXISTS vessel_daily_summary (
     mmsi            BIGINT NOT NULL REFERENCES vessels(mmsi),
