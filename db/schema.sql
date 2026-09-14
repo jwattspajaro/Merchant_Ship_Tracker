@@ -54,6 +54,8 @@ CREATE INDEX IF NOT EXISTS idx_port_calls_port ON port_calls (port_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_port_calls_one_open_per_vessel
     ON port_calls (mmsi) WHERE departed_at IS NULL;
 
+-- Nota: las columnas de calado se anaden a la vista mas abajo, despues de que
+-- el ALTER TABLE las haya creado en port_calls.
 CREATE OR REPLACE VIEW port_call_durations AS
 SELECT id, mmsi, port_id, call_type, arrived_at, departed_at,
        EXTRACT(EPOCH FROM (COALESCE(departed_at, now()) - arrived_at)) AS dwell_seconds
@@ -74,6 +76,45 @@ CREATE INDEX IF NOT EXISTS idx_route_legs_ports
 -- Un buque no puede tener dos tramos abiertos a la vez.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_route_legs_one_open_per_vessel
     ON route_legs (mmsi) WHERE destination_port_id IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- Calado (seccion 4.3, ampliacion posterior)
+--
+-- El AIS SI transmite el calado maximo estatico, en ShipStaticData, y el calado
+-- cambia entre cargado y en lastre. La diferencia de calado entre la llegada y
+-- la salida de una escala atracada es el mejor indicador de carga que se puede
+-- sacar del AIS.
+--
+-- Sigue siendo una INFERENCIA, no una medida, y por tres motivos concretos:
+--   1. Lo teclea la tripulacion a mano. Se queda desactualizado, o mal puesto.
+--   2. Viene redondeado a 0,1 m.
+--   3. De metros a toneladas hace falta la tabla hidrostatica del buque (TPC),
+--      que el AIS no da. Sin ella hay direccion y magnitud relativa, no tonelaje.
+--
+-- Por eso vive en su propia tabla y no se mezcla con lo observado sin adornos.
+CREATE TABLE IF NOT EXISTS vessel_draught_reports (
+    mmsi         BIGINT NOT NULL REFERENCES vessels(mmsi),
+    reported_at  TIMESTAMPTZ NOT NULL,
+    draught_m    DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (mmsi, reported_at)
+);
+CREATE INDEX IF NOT EXISTS idx_draught_mmsi_time
+    ON vessel_draught_reports (mmsi, reported_at DESC);
+
+ALTER TABLE vessels    ADD COLUMN IF NOT EXISTS draught_m            DOUBLE PRECISION;
+ALTER TABLE port_calls ADD COLUMN IF NOT EXISTS draught_on_arrival   DOUBLE PRECISION;
+ALTER TABLE port_calls ADD COLUMN IF NOT EXISTS draught_on_departure DOUBLE PRECISION;
+
+-- Ahora que port_calls tiene las columnas de calado, la vista las publica junto
+-- con la diferencia. Positiva = el buque salio mas hundido (cargo neto);
+-- negativa = salio mas ligero (descargo neto).
+CREATE OR REPLACE VIEW port_call_durations AS
+SELECT id, mmsi, port_id, call_type, arrived_at, departed_at,
+       EXTRACT(EPOCH FROM (COALESCE(departed_at, now()) - arrived_at)) AS dwell_seconds,
+       draught_on_arrival,
+       draught_on_departure,
+       draught_on_departure - draught_on_arrival AS draught_delta_m
+FROM port_calls;
 
 CREATE TABLE IF NOT EXISTS vessel_daily_summary (
     mmsi            BIGINT NOT NULL REFERENCES vessels(mmsi),

@@ -32,6 +32,50 @@ export const CARGO_OPERATIONS_UNAVAILABLE = Object.freeze({
 });
 
 /**
+ * Lee el cambio de calado de una escala. Es lo mas cerca que el AIS deja llegar
+ * a "se movio carga", y aun asi es una inferencia: el calado lo teclea la
+ * tripulacion, viene redondeado a 0,1 m, y para pasar de metros a toneladas
+ * hace falta la tabla hidrostatica del buque, que el AIS no transmite.
+ *
+ * Hay direccion y magnitud relativa. No hay tonelaje.
+ */
+export function describeDraughtChange(portCall) {
+  const from = portCall?.draught_on_arrival ?? null;
+  const to = portCall?.draught_on_departure ?? null;
+  if (from === null || to === null) {
+    return {
+      available: false,
+      reason: portCall?.departed_at ? 'draught_not_reported' : 'call_still_open',
+      message:
+        'Sin calado declarado en la llegada y en la salida no se puede inferir nada sobre la carga.',
+    };
+  }
+
+  const delta = Number((to - from).toFixed(2));
+  const direction = delta > 0.05 ? 'loaded' : delta < -0.05 ? 'discharged' : 'no_significant_change';
+  return {
+    available: true,
+    draught_on_arrival_m: from,
+    draught_on_departure_m: to,
+    draught_delta_m: delta,
+    direction,
+    interpretation: {
+      loaded: 'El buque salio mas hundido: carga neta embarcada.',
+      discharged: 'El buque salio mas ligero: descarga neta.',
+      no_significant_change:
+        'El calado apenas cambio (menos de 10 cm). O no se movio carga, o entro tanta como salio, o nadie actualizo el dato.',
+    }[direction],
+    is_inference: true,
+    caveats: [
+      'El calado lo declara la tripulacion a mano: se queda desactualizado o mal puesto con frecuencia.',
+      'Viene redondeado a 0,1 m, asi que movimientos pequenos no se distinguen del ruido.',
+      'De metros a toneladas hace falta la tabla hidrostatica del buque (TPC), que el AIS no da: hay direccion y magnitud relativa, no tonelaje.',
+      'Tambien cambia con el consumo de combustible, el lastre y la densidad del agua, no solo con la carga.',
+    ],
+  };
+}
+
+/**
  * Anota una escala con lo que se puede y no se puede afirmar sobre la operacion
  * de carga. Una escala 'berth' abierta es una ventana probable EN CURSO; una
  * 'anchorage' es espera, no trabajo.
@@ -53,6 +97,8 @@ export function describeCargoOperations(portCall) {
             'Ventana inferida de la posicion AIS: el buque esta en el muelle. No es confirmacion de que se este moviendo carga.',
         }
       : null,
+    // Lo unico que el AIS deja inferir sobre carga, y etiquetado como tal.
+    draught_change: describeDraughtChange(portCall),
     note: isBerth
       ? undefined
       : "La escala es de tipo 'anchorage': el buque esta fondeado, probablemente esperando turno, no trabajando.",

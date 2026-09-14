@@ -52,10 +52,10 @@ export async function processPosition(client, portIndex, position) {
         `Estado inconsistente para MMSI ${mmsi}: escala ${openCall.id} y tramo ${openLeg.id} abiertos a la vez`,
       );
     }
-    await client.query('UPDATE port_calls SET departed_at = $2 WHERE id = $1', [
-      openCall.id,
-      recordedAt,
-    ]);
+    await client.query(
+      `UPDATE port_calls SET departed_at = $2, draught_on_departure = $3 WHERE id = $1`,
+      [openCall.id, recordedAt, await draughtAt(client, mmsi, recordedAt)],
+    );
     events.push({ type: 'port_call_closed', portCallId: openCall.id, portId: openCall.port_id });
 
     const legRow = await client.query(
@@ -84,9 +84,9 @@ export async function processPosition(client, portIndex, position) {
   // 3. Entrada a puerto sin escala abierta.
   if (match && !openCall) {
     const callRow = await client.query(
-      `INSERT INTO port_calls (mmsi, port_id, call_type, arrived_at)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [mmsi, match.port.id, match.callType, recordedAt],
+      `INSERT INTO port_calls (mmsi, port_id, call_type, arrived_at, draught_on_arrival)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [mmsi, match.port.id, match.callType, recordedAt, await draughtAt(client, mmsi, recordedAt)],
     );
     openCall = callRow.rows[0];
     events.push({
@@ -106,6 +106,23 @@ export async function processPosition(client, portIndex, position) {
     openLeg,
     events,
   };
+}
+
+/**
+ * Ultimo calado declarado por el buque en o antes de ese instante.
+ *
+ * Se mira hacia atras, nunca hacia delante: al abrir la escala interesa como
+ * venia el buque, no como se fue. Devuelve null si el buque nunca ha declarado
+ * calado, que es lo normal hasta que llega su primer ShipStaticData.
+ */
+export async function draughtAt(client, mmsi, at) {
+  const { rows } = await client.query(
+    `SELECT draught_m FROM vessel_draught_reports
+      WHERE mmsi = $1 AND reported_at <= $2
+      ORDER BY reported_at DESC LIMIT 1`,
+    [mmsi, at],
+  );
+  return rows[0]?.draught_m ?? null;
 }
 
 export async function findOpenCall(client, mmsi) {

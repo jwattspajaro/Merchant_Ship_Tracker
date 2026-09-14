@@ -434,6 +434,29 @@ test(
         assert.ok(tankers.body.vessels.every((v) => v.ship_type_label === 'Tanker'));
         assert.equal((await get('/vessels?type=Passenger')).status, 400);
 
+        // Calado: sin declararlo, no se infiere nada. Es lo correcto.
+        const sinCalado = await get(`/vessels/${MMSI_A}/dwell`);
+        assert.equal(sinCalado.body.cargo_operations.draught_change.available, false);
+
+        // Con calado declarado en llegada y salida, sale la direccion y el delta.
+        await query(
+          `INSERT INTO vessel_draught_reports (mmsi, reported_at, draught_m) VALUES ($1, $2, $3)`,
+          [MMSI_B, new Date(base.getTime() + 23 * HOUR), 12.4],
+        );
+        // getVesselDwell devuelve la escala MAS RECIENTE, que es la de destino.
+        await query(
+          `UPDATE port_calls SET draught_on_arrival = 8.6, draught_on_departure = 12.4
+            WHERE id = (SELECT id FROM port_calls WHERE mmsi = $1 ORDER BY arrived_at DESC LIMIT 1)`,
+          [MMSI_B],
+        );
+        const conCalado = await get(`/vessels/${MMSI_B}/dwell`);
+        const dc = conCalado.body.cargo_operations.draught_change;
+        assert.equal(dc.available, true);
+        assert.equal(dc.draught_delta_m, 3.8);
+        assert.equal(dc.direction, 'loaded');
+        assert.equal(dc.is_inference, true);
+        assert.equal(dc.tonnes, undefined, 'el AIS no da toneladas y no debe aparecer ninguna');
+
         const dwell = await get(`/vessels/${MMSI_A}/dwell`);
         assert.equal(dwell.status, 200);
         assert.equal(dwell.body.port_call.port.unlocode, HAMBURG);

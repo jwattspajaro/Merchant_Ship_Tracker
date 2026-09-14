@@ -64,6 +64,7 @@ export async function getVessel(mmsi) {
 export async function getVesselDwell(mmsi) {
   const { rows } = await query(
     `SELECT d.id, d.mmsi, d.port_id, d.call_type, d.arrived_at, d.departed_at, d.dwell_seconds,
+            d.draught_on_arrival, d.draught_on_departure, d.draught_delta_m,
             po.unlocode, po.name AS port_name, po.country AS port_country
        FROM port_call_durations d
        JOIN ports po ON po.id = d.port_id
@@ -104,7 +105,9 @@ export async function getPortDwellStats(portId) {
             AVG(dwell_seconds)         AS avg_dwell_seconds,
             MIN(dwell_seconds)         AS min_dwell_seconds,
             MAX(dwell_seconds)         AS max_dwell_seconds,
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY dwell_seconds) AS median_dwell_seconds
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY dwell_seconds) AS median_dwell_seconds,
+            COUNT(*) FILTER (WHERE draught_delta_m IS NOT NULL)::int   AS calls_with_draught,
+            AVG(draught_delta_m)                                       AS avg_draught_delta_m
        FROM port_call_durations
       WHERE port_id = $1 AND departed_at IS NOT NULL
       GROUP BY call_type
@@ -206,6 +209,7 @@ function buildCoverageNote(count, observedFrom, requestedFrom, retentionHorizon,
 export async function getPortCalls(portId, { from, to, callType = null, limit = 500 } = {}) {
   const { rows } = await query(
     `SELECT d.id, d.mmsi, d.call_type, d.arrived_at, d.departed_at, d.dwell_seconds,
+            d.draught_on_arrival, d.draught_on_departure, d.draught_delta_m,
             v.name, v.imo, v.ship_type_label, v.flag
        FROM port_call_durations d
        JOIN vessels v ON v.mmsi = d.mmsi
@@ -259,7 +263,14 @@ export async function getPortTraffic(portId, { from, to, bucket = 'month' } = {}
             COUNT(DISTINCT c.mmsi)::int                AS vessels,
             COUNT(*) FILTER (WHERE v.ship_type_label = 'Cargo')::int  AS cargo_calls,
             COUNT(*) FILTER (WHERE v.ship_type_label = 'Tanker')::int AS tanker_calls,
-            AVG(EXTRACT(EPOCH FROM (c.departed_at - c.arrived_at)))   AS avg_dwell_seconds
+            AVG(EXTRACT(EPOCH FROM (c.departed_at - c.arrived_at)))   AS avg_dwell_seconds,
+            -- Proxy de carga: positivo = los buques salieron mas hundidos de
+            -- lo que entraron (carga neta); negativo = descarga neta.
+            COUNT(*) FILTER (WHERE c.draught_on_arrival IS NOT NULL
+                               AND c.draught_on_departure IS NOT NULL)::int AS calls_with_draught,
+            AVG(c.draught_on_departure - c.draught_on_arrival)         AS avg_draught_delta_m,
+            COUNT(*) FILTER (WHERE c.draught_on_departure > c.draught_on_arrival)::int AS calls_loaded,
+            COUNT(*) FILTER (WHERE c.draught_on_departure < c.draught_on_arrival)::int AS calls_discharged
        FROM port_calls c
        JOIN vessels v ON v.mmsi = c.mmsi
       WHERE c.port_id = $1 AND c.arrived_at >= $2 AND c.arrived_at < $3

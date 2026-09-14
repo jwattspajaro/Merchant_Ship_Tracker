@@ -38,10 +38,13 @@ export class IngestPipeline {
     this.rejected = new Set();
     /** mmsi -> ms de la ultima posicion GUARDADA (para el intervalo minimo). */
     this.lastStored = new Map();
+    /** mmsi -> ultimo calado guardado. ShipStaticData se repite cada 6 minutos
+     *  con el mismo valor; solo interesan los cambios. */
+    this.lastDraught = new Map();
 
     this.flushing = false;
     this.timers = [];
-    this.stats = { positions: 0, stored: 0, throttled: 0, dropped: 0, statics: 0, errors: 0 };
+    this.stats = { positions: 0, stored: 0, throttled: 0, dropped: 0, statics: 0, draughts: 0, errors: 0 };
   }
 
   async start() {
@@ -100,16 +103,35 @@ export class IngestPipeline {
     this.merchants.set(s.mmsi, label);
 
     await query(
-      `INSERT INTO vessels (mmsi, imo, name, ship_type_code, ship_type_label, flag, last_seen_at)
-       VALUES ($1, $2, $3, $4, $5, $6, now())
+      `INSERT INTO vessels (mmsi, imo, name, ship_type_code, ship_type_label, flag, draught_m, last_seen_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
        ON CONFLICT (mmsi) DO UPDATE SET
          imo             = COALESCE(EXCLUDED.imo, vessels.imo),
          name            = COALESCE(EXCLUDED.name, vessels.name),
          ship_type_code  = EXCLUDED.ship_type_code,
          ship_type_label = EXCLUDED.ship_type_label,
          flag            = COALESCE(EXCLUDED.flag, vessels.flag),
+         draught_m       = COALESCE(EXCLUDED.draught_m, vessels.draught_m),
          last_seen_at    = GREATEST(vessels.last_seen_at, EXCLUDED.last_seen_at)`,
-      [s.mmsi, s.imo, s.name, s.shipTypeCode, label, flagFromMmsi(s.mmsi)],
+      [s.mmsi, s.imo, s.name, s.shipTypeCode, label, flagFromMmsi(s.mmsi), s.draughtM],
+    );
+
+    await this.#recordDraught(s.mmsi, s.draughtM);
+  }
+
+  /**
+   * Guarda el calado solo cuando cambia. ShipStaticData llega cada 6 minutos
+   * repitiendo el mismo valor: guardarlo todo llenaria la tabla de filas
+   * identicas y no anadiria ni un dato.
+   */
+  async #recordDraught(mmsi, draughtM) {
+    if (draughtM === null || this.lastDraught.get(mmsi) === draughtM) return;
+    this.lastDraught.set(mmsi, draughtM);
+    this.stats.draughts += 1;
+    await query(
+      `INSERT INTO vessel_draught_reports (mmsi, reported_at, draught_m)
+       VALUES ($1, now(), $2) ON CONFLICT (mmsi, reported_at) DO NOTHING`,
+      [mmsi, draughtM],
     );
   }
 
@@ -200,7 +222,10 @@ export class IngestPipeline {
   #pruneSeen() {
     const cutoff = Date.now() - SEEN_PRUNE_MS;
     for (const [mmsi, ts] of this.lastStored) {
-      if (ts < cutoff) this.lastStored.delete(mmsi);
+      if (ts < cutoff) {
+        this.lastStored.delete(mmsi);
+        this.lastDraught.delete(mmsi);
+      }
     }
     if (this.rejected.size > 200_000) this.rejected.clear();
   }
@@ -209,7 +234,7 @@ export class IngestPipeline {
     const s = this.stats;
     console.log(
       `[ingest] posiciones=${s.positions} guardadas=${s.stored} limitadas=${s.throttled} ` +
-        `descartadas_no_mercante=${s.dropped} estaticos=${s.statics} errores=${s.errors} ` +
+        `descartadas_no_mercante=${s.dropped} estaticos=${s.statics} calados=${s.draughts} errores=${s.errors} ` +
         `cola=${this.queue.length} mercantes=${this.merchants.size}`,
     );
   }

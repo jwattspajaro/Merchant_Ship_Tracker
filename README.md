@@ -147,6 +147,29 @@ Para el dato real hay dos vías, y ninguna es AIS: integrar el **TOS/EDI** del
 operador de terminal, o contratar un proveedor comercial de hitos de contenedor
 (Gate-In / Loaded / Discharged / Departed). Eso está fuera de este alcance.
 
+#### Lo único que el AIS sí deja inferir: el calado
+
+El AIS **sí** transmite el calado máximo estático, y el calado cambia entre
+cargado y en lastre. La diferencia entre la llegada y la salida de una escala
+(`draught_delta_m`) es el mejor indicador de carga que se puede sacar del AIS, y
+la API lo devuelve en `cargo_operations.draught_change` marcado con
+`is_inference: true`.
+
+Positivo = el buque salió más hundido (carga neta). Negativo = salió más ligero
+(descarga neta). Por debajo de 10 cm no se distingue del ruido.
+
+Cuatro razones por las que **no es una medida**, y van en la propia respuesta:
+
+1. Lo teclea la tripulación a mano: se queda desactualizado o mal puesto.
+2. Viene redondeado a 0,1 m.
+3. De metros a toneladas hace falta la tabla hidrostática del buque (TPC), que el
+   AIS no transmite. Hay **dirección y magnitud relativa, no tonelaje**.
+4. El calado también cambia con el combustible, el lastre y la densidad del agua.
+
+> La especificación original prohibía estimar carga desde el AIS. Se añadió por
+> decisión posterior, para trabajo estadístico, y por eso va etiquetado como
+> inferencia en cada respuesta en vez de mezclarse con lo observado.
+
 ### 4. Estimación de rutas (`src/core/routes.js`)
 
 Para un par (origen, destino):
@@ -349,6 +372,7 @@ El número de contenedor va en el BL, no en la declaración.
 | País de origen | `arrivals_by_origin` — de qué puertos llegaron los buques |
 | Fecha de llegada + puerto | `/ports/:id/calls?from=&to=` — candidatos observados en esa ventana |
 | Modo marítimo, tipo de mercancía | `cargo_calls` / `tanker_calls` en la serie |
+| Volumen movido (aproximado) | `avg_draught_delta_m`, `calls_loaded`, `calls_discharged` — inferencia, no tonelaje |
 
 Se correlacionan **series**, no envíos. Y con una advertencia que la API repite
 en cada respuesta: lo observado es **presencia y tiempo de muelle, no tonelaje**.

@@ -237,3 +237,37 @@ test('la operacion de carga se declara no disponible, nunca estimada', () => {
 
   assert.equal(describeCargoOperations(null).likely_working_window, null);
 });
+
+// --- 4.3 (ampliación): calado como indicador de carga ----------------------
+
+test('el cambio de calado se etiqueta como inferencia, nunca como tonelaje', async () => {
+  const { describeDraughtChange } = await import('../src/core/cargoOperations.js');
+
+  const cargado = describeDraughtChange({ draught_on_arrival: 7.9, draught_on_departure: 11.7 });
+  assert.equal(cargado.available, true);
+  assert.equal(cargado.direction, 'loaded');
+  assert.equal(cargado.draught_delta_m, 3.8);
+  assert.equal(cargado.is_inference, true);
+  // Lo que NO debe aparecer nunca: toneladas.
+  assert.equal(cargado.tonnes, undefined);
+  assert.equal(cargado.cargo_tonnage, undefined);
+  assert.ok(cargado.caveats.some((c) => /toneladas/.test(c)));
+
+  const descargado = describeDraughtChange({ draught_on_arrival: 11.7, draught_on_departure: 7.9 });
+  assert.equal(descargado.direction, 'discharged');
+  assert.equal(descargado.draught_delta_m, -3.8);
+
+  // Por debajo de 10 cm no se distingue del ruido: el AIS redondea a 0,1 m.
+  assert.equal(
+    describeDraughtChange({ draught_on_arrival: 11.7, draught_on_departure: 11.74 }).direction,
+    'no_significant_change',
+  );
+
+  // Sin los dos extremos declarados no se infiere nada.
+  assert.equal(describeDraughtChange({ draught_on_arrival: 11.7, draught_on_departure: null }).available, false);
+  assert.equal(describeDraughtChange(null).available, false);
+  assert.equal(
+    describeDraughtChange({ draught_on_arrival: null, draught_on_departure: null, departed_at: null }).reason,
+    'call_still_open',
+  );
+});

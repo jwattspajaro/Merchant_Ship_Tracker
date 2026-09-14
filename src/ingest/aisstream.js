@@ -8,7 +8,7 @@ import WebSocket from 'ws';
  * posiciones.
  *
  * Eventos emitidos:
- *   'static'   {mmsi, imo, name, callSign, shipTypeCode}
+ *   'static'   {mmsi, imo, name, callSign, shipTypeCode, draughtM}
  *   'position' {mmsi, recordedAt: Date, lat, lon, sog, cog, navStatusCode}
  *   'open' | 'close' | 'error'
  *
@@ -103,6 +103,8 @@ export class AisStreamSource extends EventEmitter {
         name: cleanString(s.Name ?? meta.ShipName),
         callSign: cleanString(s.CallSign),
         shipTypeCode: Number.isFinite(Number(s.Type)) ? Number(s.Type) : null,
+        // Calado maximo estatico, en metros. 0 significa "no disponible".
+        draughtM: Number(s.MaximumStaticDraught) > 0 ? Number(s.MaximumStaticDraught) : null,
       });
       return;
     }
