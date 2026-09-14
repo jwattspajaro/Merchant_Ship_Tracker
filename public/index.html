@@ -17,6 +17,7 @@
     --cargo: #4ea8de;
     --tanker: #f4a259;
     --port: #7ee787;
+    --track: #c77dff;
     --accent: #4ea8de;
     --warn: #f0b429;
   }
@@ -136,6 +137,7 @@
     <span><i style="background:var(--cargo)"></i>Cargo</span>
     <span><i style="background:var(--tanker)"></i>Tanker</span>
     <span><i style="background:var(--port)"></i>Puerto</span>
+    <span><i style="background:var(--track)"></i>Recorrido</span>
   </div>
 
   <div class="tabs" role="tablist">
@@ -153,6 +155,14 @@
 
     <label for="f-search">Buscar</label>
     <input type="search" id="f-search" placeholder="Nombre o MMSI" autocomplete="off">
+
+    <label for="f-track">Recorrido del buque elegido</label>
+    <select id="f-track">
+      <option value="0">No mostrar</option>
+      <option value="7">Últimos 7 días</option>
+      <option value="30" selected>Últimos 30 días</option>
+      <option value="90">Últimos 90 días</option>
+    </select>
 
     <ul class="vlist" id="vessel-list"></ul>
     <div id="vessel-detail"></div>
@@ -181,6 +191,9 @@
   'use strict';
 
   const REFRESH_MS = 30000;
+  // Leaflet pinta en SVG con atributos, no con CSS, asi que el color del
+  // recorrido se repite aqui. Debe coincidir con --track de la hoja de estilos.
+  const TRACK_COLOR = '#c77dff';
   const $ = (id) => document.getElementById(id);
   const statusEl = $('status');
 
@@ -192,6 +205,7 @@
   const portLayer   = L.layerGroup().addTo(map);
   const vesselLayer = L.layerGroup().addTo(map);
   const routeLayer  = L.layerGroup().addTo(map);
+  const trackLayer  = L.layerGroup().addTo(map);
 
   let ports = [];
   let vessels = [];
@@ -300,18 +314,36 @@
     const marker = markers.get(mmsi);
     if (marker) map.setView(marker.getLatLng(), Math.max(map.getZoom(), 6));
 
+    const days = Number($('f-track').value);
     try {
-      const [dwell, leg] = await Promise.all([
+      const [dwell, leg, track] = await Promise.all([
         api('/vessels/' + mmsi + '/dwell'),
-        api('/vessels/' + mmsi + '/current-leg')
+        api('/vessels/' + mmsi + '/current-leg'),
+        days > 0 ? api('/vessels/' + mmsi + '/track?days=' + days) : Promise.resolve(null)
       ]);
-      box.innerHTML = renderVessel(dwell, leg);
+      box.innerHTML = renderVessel(dwell, leg, track);
+      drawTrack(track);
     } catch (err) {
       box.innerHTML = '<div class="empty">No se pudo consultar: ' + esc(err.message) + '</div>';
     }
   }
 
-  function renderVessel(dwell, leg) {
+  /** Traza real del buque. Se encuadra sobre ella: es lo que se ha pedido ver. */
+  function drawTrack(track) {
+    trackLayer.clearLayers();
+    if (!track || track.track.length < 2) return;
+
+    const path = unwrapLongitudes(track.track);
+    L.polyline(path, { color: TRACK_COLOR, weight: 2, opacity: .85 }).addTo(trackLayer);
+    // Punto de partida del recorrido, para saber por donde se empieza a leer.
+    L.circleMarker(path[0], {
+      radius: 4, color: TRACK_COLOR, fillColor: '#0e1620', fillOpacity: 1, weight: 2
+    }).bindPopup('Inicio del recorrido<br>' + when(track.track[0][2])).addTo(trackLayer);
+
+    map.fitBounds(L.latLngBounds(path).pad(0.2));
+  }
+
+  function renderVessel(dwell, leg, track) {
     const v = dwell.vessel;
     let html =
       '<div class="card"><h3>' + esc(v.name || 'Sin nombre') + '</h3><dl>' +
@@ -354,6 +386,27 @@
           '<dt>Navegando</dt><dd>' + hours(l.elapsed_seconds) + '</dd>' +
         '</dl><p class="note">El destino se sabe cuando el buque llega. No se predice.</p>'
       : '<div class="empty">En puerto o sin tramo abierto.</div>') + '</div>';
+
+    if (track) {
+      const hay = track.track.length >= 2;
+      html += '<div class="card"><h3>Recorrido · ' + track.window.days + ' días</h3>' + (hay
+        ? '<dl>' +
+            '<dt>Distancia</dt><dd>' + track.distance_nm.toLocaleString() + ' NM</dd>' +
+            '<dt>Posiciones</dt><dd>' + track.positions_in_window.toLocaleString() + '</dd>' +
+            '<dt>Desde</dt><dd>' + when(track.observed_from) + '</dd>' +
+            '<dt>Hasta</dt><dd>' + when(track.observed_to) + '</dd>' +
+          '</dl>' +
+          (track.downsampled
+            ? '<p class="note">Dibujado con ' + track.points_returned +
+              ' puntos de los ' + track.positions_in_window.toLocaleString() +
+              ' guardados. La distancia está medida sobre todos, no sobre el recorte.</p>'
+            : '')
+        : '<div class="empty">Sin posiciones en esta ventana.</div>') +
+        (track.coverage_note
+          ? '<p class="note"><strong>Aviso:</strong> ' + esc(track.coverage_note) + '</p>'
+          : '') +
+        '</div>';
+    }
 
     return html;
   }
@@ -421,8 +474,10 @@
         (historical
           ? '<p class="note">Traza real del viaje cuya duración está más cerca de la mediana. ' +
             'No es un promedio de caminos.</p>'
-          : '<p class="note"><strong>' + esc(r.transit_note || '') + '</strong> ' +
-            'La línea es geometría esférica, no un recorrido observado.</p>') +
+          : '<p class="note"><strong>No es una ruta navegable.</strong> Es la línea más ' +
+            'corta sobre la esfera entre los dos puertos, y como tal puede cruzar ' +
+            'tierra, hielo o aguas cerradas. Sirve para orientar, no para navegar. ' +
+            esc(r.transit_note || '') + '</p>') +
         '</div>';
     } catch (err) {
       box.innerHTML = '<div class="empty">' + esc(err.message) + '</div>';
@@ -448,6 +503,10 @@
     if (li) selectVessel(Number(li.dataset.mmsi));
   });
   $('f-search').addEventListener('input', renderList);
+  $('f-track').addEventListener('change', () => {
+    if (selectedMmsi) selectVessel(selectedMmsi);
+    else trackLayer.clearLayers();
+  });
   $('f-type').addEventListener('change', () => loadVessels().catch(onFail));
   $('r-go').addEventListener('click', estimateRoute);
 

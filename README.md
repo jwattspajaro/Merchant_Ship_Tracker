@@ -56,6 +56,10 @@ en `localhost`, así que un visor externo no funcionaría.
 - **Flota** — buques sobre el mapa, en azul los de carga y naranja los tanque.
   Al pinchar uno: su escala actual (atracado o fondeado), la permanencia, la
   ventana probable de carga con su advertencia, y el tramo en curso.
+- **Recorrido** — al elegir un buque se dibuja en morado su traza real de los
+  últimos 7, 30 o 90 días, con la distancia navegada. Solo muestra lo observado:
+  si el sistema lleva menos tiempo en marcha que la ventana pedida, o las
+  posiciones ya pasaron el horizonte de retención, la ficha lo dice.
 - **Rutas** — eliges dos puertos y dibuja la ruta estimada. Línea continua verde
   si es histórica, discontinua ámbar si es gran círculo; el panel dice cuál es y
   por qué.
@@ -166,6 +170,7 @@ En `historical` cada punto es `[lat, lon, timestamp]`; en `great_circle` es
 | GET | `/vessels` | Últimos mercantes vistos + su posición más reciente. `?type=Cargo\|Tanker`, `?limit`, `?offset` |
 | GET | `/vessels/:mmsi/dwell` | Escala actual o última, con `dwell_seconds` y `cargo_operations` |
 | GET | `/vessels/:mmsi/current-leg` | Tramo en curso (sin destino todavía) |
+| GET | `/vessels/:mmsi/track` | Recorrido observado. `?days=30` (1–365), con aviso de cobertura |
 | GET | `/vessels/:mmsi/cargo-operations` | **501** — no disponible en esta fase, con el porqué |
 | GET | `/ports` | Puertos de referencia. `?q=` para buscar |
 | GET | `/ports/:id/dwell-stats` | Permanencia media, mediana, mín. y máx. por `call_type` |
@@ -266,6 +271,15 @@ npm run job:retention
   salta del radio de un puerto directamente al de otro entre dos posiciones, se
   registra un tramo de duración cero: es el reflejo honesto de que los radios se
   tocan o de que las posiciones llegaron muy espaciadas.
+- **La ruta de gran círculo no es navegable.** Cuando no hay 3 tramos observados
+  para un par de puertos, la especificación manda devolver una línea de gran
+  círculo entre centroides: la distancia más corta sobre la esfera, que es la
+  ruta de un avión, no la de un barco. Puede cruzar continentes. El visor lo
+  advierte de forma explícita y la API devuelve `source: "great_circle"` para que
+  nadie la confunda con una ruta real. En cuanto hay 3 tramos observados, la ruta
+  pasa a ser la traza real de un viaje y sí sigue el mar. Resolverlo de verdad
+  exige enrutado marítimo sobre un grafo que evite tierra y respete canales y
+  estrechos; no está en este alcance.
 - **Los centroides del seed son aproximados** (~1–3 km), suficiente para radios de
   8–15 km. Sustitúyelos por un dataset UN/LOCODE propio si necesitas precisión.
 - **La bandera se deriva del MID del MMSI**, no la transmite el AIS. Un MID fuera

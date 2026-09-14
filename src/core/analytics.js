@@ -1,4 +1,14 @@
 import { query } from '../db.js';
+import { config } from '../config.js';
+import { haversineMeters, metersToNauticalMiles, downsampleEvenly } from '../lib/geo.js';
+
+// Tope de filas crudas que se leen para un recorrido. A un minuto por posicion
+// (el intervalo por defecto de la ingesta) 30 dias son ~43.000 filas; el tope
+// deja margen y evita que una peticion con days=365 se traiga media tabla.
+export const TRACK_ROW_LIMIT = 100_000;
+// Puntos que se devuelven como mucho. Suficiente para dibujar un recorrido
+// reconocible sin mandar megabytes al navegador.
+export const TRACK_MAX_POINTS = 1000;
 
 /** Ultimos buques mercantes vistos, con su posicion mas reciente. */
 export async function listVessels({ limit = 100, offset = 0, shipType = null } = {}) {
@@ -107,6 +117,79 @@ export async function getPortDwellStats(portId) {
 export async function getPort(portId) {
   const { rows } = await query('SELECT * FROM ports WHERE id = $1', [portId]);
   return rows[0] ?? null;
+}
+
+/**
+ * Recorrido real de un buque en una ventana de tiempo: sus posiciones crudas,
+ * no una ruta estimada.
+ *
+ * Solo puede devolver lo que el sistema llegó a observar. Dos limites reales, y
+ * ambos se informan en la respuesta en vez de disimularse:
+ *  - Si la instalacion lleva menos tiempo en marcha que la ventana pedida, el
+ *    recorrido empieza cuando empezo a mirar, no hace 30 dias.
+ *  - Las posiciones anteriores a RAW_RETENTION_DAYS ya no estan en la tabla:
+ *    la tarea de retencion las resumio y desconecto su particion.
+ *
+ * La distancia se calcula sobre TODAS las posiciones de la ventana; el recorte
+ * a TRACK_MAX_POINTS es solo para lo que se manda al cliente. Medir sobre la
+ * version recortada acortaria la distancia en cada curva.
+ */
+export async function getVesselTrack(mmsi, { days = 30, maxPoints = TRACK_MAX_POINTS } = {}) {
+  const to = new Date();
+  const from = new Date(to.getTime() - days * 86_400_000);
+
+  const { rows } = await query(
+    `SELECT lat, lon, recorded_at, sog
+       FROM vessel_positions
+      WHERE mmsi = $1 AND recorded_at >= $2 AND recorded_at <= $3
+      ORDER BY recorded_at
+      LIMIT ${TRACK_ROW_LIMIT}`,
+    [mmsi, from, to],
+  );
+
+  let meters = 0;
+  for (let i = 1; i < rows.length; i += 1) {
+    meters += haversineMeters(
+      Number(rows[i - 1].lat), Number(rows[i - 1].lon),
+      Number(rows[i].lat), Number(rows[i].lon),
+    );
+  }
+
+  const points = rows.map((r) => [Number(r.lat), Number(r.lon), r.recorded_at.toISOString()]);
+  const track = points.length > maxPoints ? downsampleEvenly(points, maxPoints) : points;
+
+  // Horizonte de retencion: antes de esta fecha las posiciones crudas ya no
+  // tienen por que existir, aunque el buque si navegara.
+  const retentionHorizon = new Date(to.getTime() - config.retention.rawRetentionDays * 86_400_000);
+  const observedFrom = rows.length ? rows[0].recorded_at : null;
+
+  return {
+    window: { days, from, to },
+    positions_in_window: rows.length,
+    points_returned: track.length,
+    downsampled: track.length < points.length,
+    truncated: rows.length === TRACK_ROW_LIMIT,
+    distance_nm: Number(metersToNauticalMiles(meters).toFixed(2)),
+    observed_from: observedFrom,
+    observed_to: rows.length ? rows.at(-1).recorded_at : null,
+    // [[lat, lon, iso8601], ...]
+    track,
+    coverage_note: buildCoverageNote(rows.length, observedFrom, from, retentionHorizon, days),
+  };
+}
+
+function buildCoverageNote(count, observedFrom, requestedFrom, retentionHorizon, days) {
+  if (count === 0) {
+    return `Sin posiciones guardadas en los ultimos ${days} dias para este buque. O no se ha visto en ese tiempo, o son anteriores al horizonte de retencion.`;
+  }
+  if (requestedFrom < retentionHorizon) {
+    return `La ventana pedida se adentra mas alla del horizonte de retencion (${retentionHorizon.toISOString().slice(0, 10)}). Lo anterior a esa fecha esta resumido en vessel_daily_summary, no como posiciones.`;
+  }
+  // Mas de un dia de hueco al principio: el sistema aun no miraba.
+  if (observedFrom && observedFrom.getTime() - requestedFrom.getTime() > 86_400_000) {
+    return `El recorrido empieza el ${observedFrom.toISOString().slice(0, 10)}: no hay observaciones anteriores de este buque en la ventana pedida.`;
+  }
+  return null;
 }
 
 /** Transito medio entre dos puertos concretos, sobre tramos ya cerrados. */

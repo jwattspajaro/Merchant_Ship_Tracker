@@ -10,6 +10,7 @@ import {
   getCurrentLeg,
   getPort,
   getPortDwellStats,
+  getVesselTrack,
 } from '../core/analytics.js';
 import { estimateRoute } from '../core/routes.js';
 import { describeCargoOperations, CARGO_OPERATIONS_UNAVAILABLE } from '../core/cargoOperations.js';
@@ -135,6 +136,27 @@ export function createApp() {
             'El destino se determina por observacion, al entrar el buque en el radio de un puerto. No se predice.',
         },
       });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * Recorrido observado de un buque: sus posiciones crudas en una ventana de
+   * tiempo. Es lo que el buque hizo, no una ruta estimada entre puertos.
+   * ?days=30 por defecto, maximo 365.
+   */
+  app.get('/vessels/:mmsi/track', async (req, res, next) => {
+    try {
+      const mmsi = parseId(req.params.mmsi);
+      if (mmsi === null) return res.status(400).json({ error: 'mmsi invalido' });
+
+      const vessel = await getVessel(mmsi);
+      if (!vessel) return res.status(404).json({ error: 'buque desconocido', mmsi });
+
+      const days = clampInt(req.query.days, 1, 365, 30);
+      const track = await getVesselTrack(mmsi, { days });
+      res.json({ mmsi, vessel: vesselSummary(vessel), ...track });
     } catch (err) {
       next(err);
     }

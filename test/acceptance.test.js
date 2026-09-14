@@ -443,6 +443,28 @@ test(
 
         // Cuatro escalas cerradas en Rotterdam: A, B y C de 4 h, y la del buque
         // que sigue en ruta, de 3 h -> media 3,75 h.
+        // Recorrido observado: posiciones crudas, no ruta estimada.
+        const track = await get(`/vessels/${MMSI_A}/track?days=30`);
+        assert.equal(track.status, 200);
+        assert.ok(track.body.positions_in_window > 0);
+        assert.equal(track.body.points_returned, track.body.track.length);
+        assert.equal(track.body.downsampled, false);
+        for (const p of track.body.track) assert.equal(p.length, 3, '[lat, lon, timestamp]');
+        assert.ok(track.body.distance_nm > 0);
+        // Termina donde esta el buque ahora.
+        const [lastLat, lastLon] = track.body.track.at(-1);
+        assert.ok(Math.abs(lastLat - hamburg.lat) < 1e-9 && Math.abs(lastLon - hamburg.lon) < 1e-9);
+
+        // Ventana sin observaciones: se dice, no se devuelve un hueco mudo.
+        const empty = await get(`/vessels/${MMSI_A}/track?days=1`);
+        assert.equal(empty.body.positions_in_window, 0);
+        assert.match(empty.body.coverage_note, /Sin posiciones guardadas/);
+
+        // days fuera de rango se acota en vez de fallar.
+        assert.equal((await get(`/vessels/${MMSI_A}/track?days=9999`)).body.window.days, 365);
+        assert.equal((await get(`/vessels/${MMSI_A}/track?days=abc`)).body.window.days, 30);
+        assert.equal((await get('/vessels/999999999/track')).status, 404);
+
         const ds = await get(`/ports/${rotterdam.id}/dwell-stats`);
         assert.equal(ds.body.dwell_stats.berth.calls, 4);
         assert.equal(ds.body.dwell_stats.berth.avg_dwell_hours, 3.75);
