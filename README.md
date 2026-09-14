@@ -209,13 +209,15 @@ tráfico mercante. Súbelo con `SEA_ROUTE_MAX_LAT` si quieres rutas árticas.
 
 | Método | Ruta | Devuelve |
 |--------|------|----------|
-| GET | `/vessels` | Últimos mercantes vistos + su posición más reciente. `?type=Cargo\|Tanker`, `?limit`, `?offset` |
+| GET | `/vessels` | Últimos mercantes vistos + su posición más reciente. `?type=Cargo\|Tanker`, `?q=` (IMO, MMSI o nombre), `?limit`, `?offset` |
 | GET | `/vessels/:mmsi/dwell` | Escala actual o última, con `dwell_seconds` y `cargo_operations` |
 | GET | `/vessels/:mmsi/current-leg` | Tramo en curso (sin destino todavía) |
 | GET | `/vessels/:mmsi/track` | Recorrido observado. `?days=30` (1–365), con aviso de cobertura |
 | GET | `/vessels/:mmsi/cargo-operations` | **501** — no disponible en esta fase, con el porqué |
 | GET | `/ports` | Puertos de referencia. `?q=` para buscar |
 | GET | `/ports/:id/dwell-stats` | Permanencia media, mediana, mín. y máx. por `call_type` |
+| GET | `/ports/:id/calls` | Escalas en una ventana. `?from=&to=&type=berth\|anchorage` |
+| GET | `/ports/:id/traffic` | Serie agregada por periodo + llegadas por origen. `?from=&to=&bucket=month` |
 | GET | `/routes/:originPortId/:destinationPortId` | Ruta estimada (`historical` / `sea_route` / `great_circle`) + estadísticas |
 | GET | `/health` | Estado del proceso y de la base de datos |
 
@@ -320,6 +322,40 @@ npm run job:retention
   manifiesto, ni consignatario. El AIS da posición, rumbo, velocidad y estado de
   navegación, y nada más. Buscar "el contenedor que va en tal barco" exige el
   TOS/EDI del operador de terminal o un proveedor de hitos de contenedor.
+
+---
+
+## Cruzar con documentación aduanera
+
+Una declaración de importación trae fecha, puerto, subpartida, peso y valor,
+pero **no el buque**. El AIS trae el buque pero **no la carga**. Se juntan por
+dos vías, y conviene no confundirlas:
+
+**Envío concreto (identificación).** Sólo con el documento de transporte:
+
+```text
+declaración → nº de BL + transportadora → manifiesto de carga → nave y viaje → IMO → este sistema
+```
+
+El microdato público de aduanas no basta: no lleva BL ni nave. Hace falta la
+declaración en sí (que referencia el documento de transporte) o el manifiesto.
+El número de contenedor va en el BL, no en la declaración.
+
+**Correlación estadística.** No identifica envíos, y para eso no necesita el BL:
+
+| Dato aduanero | Contrapartida observada |
+|---|---|
+| Peso y valor declarados por mes | `/ports/:id/traffic?bucket=month` — escalas, buques distintos, permanencia media |
+| País de origen | `arrivals_by_origin` — de qué puertos llegaron los buques |
+| Fecha de llegada + puerto | `/ports/:id/calls?from=&to=` — candidatos observados en esa ventana |
+| Modo marítimo, tipo de mercancía | `cargo_calls` / `tanker_calls` en la serie |
+
+Se correlacionan **series**, no envíos. Y con una advertencia que la API repite
+en cada respuesta: lo observado es **presencia y tiempo de muelle, no tonelaje**.
+Una escala atracada larga sugiere más trabajo que una corta, y nada más. Las
+llegadas cuyo tramo de origen no se cerró se informan aparte en
+`arrivals_without_known_origin` en vez de repartirse entre los orígenes
+conocidos.
 - **Los centroides del seed son aproximados** (~1–3 km), suficiente para radios de
   8–15 km. Sustitúyelos por un dataset UN/LOCODE propio si necesitas precisión.
 - **La bandera se deriva del MID del MMSI**, no la transmite el AIS. Un MID fuera

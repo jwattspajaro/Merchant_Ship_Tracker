@@ -471,6 +471,44 @@ test(
         assert.equal((await get(`/vessels/${MMSI_A}/track?days=abc`)).body.window.days, 30);
         assert.equal((await get('/vessels/999999999/track')).status, 404);
 
+        // --- Correlacion con documentacion aduanera -----------------------
+        // Escalas en una ventana de fechas: lo que se cruza con la fecha de
+        // llegada de una declaracion de importacion.
+        const desde = new Date(base.getTime() - 24 * HOUR).toISOString();
+        const hasta = new Date(base.getTime() + 200 * HOUR).toISOString();
+        const calls = await get(`/ports/${rotterdam.id}/calls?from=${desde}&to=${hasta}`);
+        assert.equal(calls.status, 200);
+        assert.ok(calls.body.calls.length >= 4, 'deberian verse las escalas de la ventana');
+        assert.ok(calls.body.calls.every((c) => c.imo && c.name));
+        assert.match(calls.body.correlation_note, /no el buque de un envio concreto/);
+
+        // Solo atracadas: el fondeo del buque D no debe salir.
+        const soloBerth = await get(`/ports/${rotterdam.id}/calls?from=${desde}&to=${hasta}&type=berth`);
+        assert.ok(soloBerth.body.calls.every((c) => c.call_type === 'berth'));
+        assert.equal((await get(`/ports/${rotterdam.id}/calls?type=cualquiera`)).status, 400);
+        assert.equal((await get(`/ports/${rotterdam.id}/calls?from=2030-01-01&to=2020-01-01`)).status, 400);
+
+        // Serie agregada por periodo, que es lo que se correlaciona.
+        const traffic = await get(`/ports/${hamburg.id}/traffic?from=${desde}&to=${hasta}&bucket=month`);
+        assert.equal(traffic.status, 200);
+        assert.ok(traffic.body.traffic.length >= 1);
+        assert.ok(traffic.body.traffic.every((t) => t.calls > 0 && t.vessels > 0));
+        assert.match(traffic.body.measures_note, /NO carga movida/);
+
+        // Los tres viajes llegaron a Hamburgo desde Rotterdam.
+        const desdeRotterdam = traffic.body.arrivals_by_origin.find(
+          (o) => o.origin_unlocode === ROTTERDAM,
+        );
+        assert.ok(desdeRotterdam, 'Rotterdam deberia figurar como origen');
+        assert.equal(desdeRotterdam.arrivals, 3);
+
+        // Busqueda por IMO y por nombre, para llegar desde un documento de transporte.
+        const porImo = await get(`/vessels?q=${9000000 + (MMSI_A % 1000)}`);
+        assert.equal(porImo.body.vessels[0].mmsi, MMSI_A);
+        const porNombre = await get('/vessels?q=TEST%20CARGO%20A');
+        assert.equal(porNombre.body.vessels[0].mmsi, MMSI_A);
+        assert.deepEqual((await get('/vessels?q=NO_EXISTE_ESTE_BUQUE')).body.vessels, []);
+
         const ds = await get(`/ports/${rotterdam.id}/dwell-stats`);
         assert.equal(ds.body.dwell_stats.berth.calls, 4);
         assert.equal(ds.body.dwell_stats.berth.avg_dwell_hours, 3.75);

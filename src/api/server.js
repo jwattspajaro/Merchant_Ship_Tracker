@@ -11,6 +11,10 @@ import {
   getPort,
   getPortDwellStats,
   getVesselTrack,
+  getPortCalls,
+  getPortTraffic,
+  getPortOrigins,
+  findVessels,
 } from '../core/analytics.js';
 import { estimateRoute } from '../core/routes.js';
 import { describeCargoOperations, CARGO_OPERATIONS_UNAVAILABLE } from '../core/cargoOperations.js';
@@ -47,6 +51,12 @@ export function createApp() {
       if (shipType && !['Cargo', 'Tanker'].includes(shipType)) {
         return res.status(400).json({ error: "type debe ser 'Cargo' o 'Tanker'" });
       }
+
+      // ?q= busca por IMO, MMSI o nombre. Util al llegar desde un documento de
+      // transporte, que nombra la nave pero no da su MMSI.
+      const q = req.query.q ? String(req.query.q).trim() : null;
+      if (q) return res.json({ query: q, vessels: await findVessels(q, limit) });
+
       res.json({ limit, offset, vessels: await listVessels({ limit, offset, shipType }) });
     } catch (err) {
       next(err);
@@ -255,6 +265,74 @@ export function createApp() {
     }
   });
 
+  /**
+   * Escalas en un puerto dentro de una ventana de fechas. La pieza para cotejar
+   * con una declaracion de importacion, que trae fecha y puerto pero no buque.
+   */
+  app.get('/ports/:id/calls', async (req, res, next) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ error: 'id de puerto invalido' });
+
+      const port = await getPort(id);
+      if (!port) return res.status(404).json({ error: 'puerto desconocido', id });
+
+      const range = parseRange(req.query);
+      if (range.error) return res.status(400).json({ error: range.error });
+
+      const callType = req.query.type ? String(req.query.type) : null;
+      if (callType && !['berth', 'anchorage'].includes(callType)) {
+        return res.status(400).json({ error: "type debe ser 'berth' o 'anchorage'" });
+      }
+
+      const calls = await getPortCalls(id, { ...range, callType, limit: clampInt(req.query.limit, 1, 2000, 500) });
+      res.json({
+        port: { id: port.id, unlocode: port.unlocode, name: port.name },
+        window: { from: range.from, to: range.to },
+        calls,
+        correlation_note:
+          'Estos son los buques observados en el puerto en esa ventana, no el buque de un envio concreto. ' +
+          'Para identificar el buque de una importacion hace falta el documento de transporte (BL) o el ' +
+          'manifiesto de carga: el AIS no lleva carga.',
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** Trafico agregado por periodo: la serie que se correlaciona con la aduanera. */
+  app.get('/ports/:id/traffic', async (req, res, next) => {
+    try {
+      const id = parseId(req.params.id);
+      if (id === null) return res.status(400).json({ error: 'id de puerto invalido' });
+
+      const port = await getPort(id);
+      if (!port) return res.status(404).json({ error: 'puerto desconocido', id });
+
+      const range = parseRange(req.query);
+      if (range.error) return res.status(400).json({ error: range.error });
+
+      const bucket = String(req.query.bucket || 'month');
+      const [traffic, origins] = await Promise.all([
+        getPortTraffic(id, { ...range, bucket }),
+        getPortOrigins(id, range),
+      ]);
+
+      res.json({
+        port: { id: port.id, unlocode: port.unlocode, name: port.name, country: port.country },
+        window: { from: range.from, to: range.to, bucket },
+        traffic,
+        arrivals_by_origin: origins.origins,
+        arrivals_without_known_origin: origins.sin_origen,
+        measures_note:
+          'Mide presencia y tiempo de muelle, NO carga movida. El AIS no da toneladas ni contenedores. ' +
+          'Una escala atracada larga sugiere mas trabajo que una corta, y nada mas.',
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // --- Rutas --------------------------------------------------------------
 
   /** Ruta estimada entre dos puertos + estadisticas de transito. */
@@ -282,6 +360,20 @@ export function createApp() {
   });
 
   return app;
+}
+
+/** from/to del querystring. Por defecto, los ultimos 365 dias. */
+function parseRange(query) {
+  const to = query.to ? new Date(String(query.to)) : new Date();
+  const from = query.from
+    ? new Date(String(query.from))
+    : new Date(to.getTime() - 365 * 86_400_000);
+
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return { error: 'from/to deben ser fechas ISO (por ejemplo 2019-01-01)' };
+  }
+  if (from >= to) return { error: 'from debe ser anterior a to' };
+  return { from, to };
 }
 
 function parseId(value) {

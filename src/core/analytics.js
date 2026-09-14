@@ -192,6 +192,125 @@ function buildCoverageNote(count, observedFrom, requestedFrom, retentionHorizon,
   return null;
 }
 
+/**
+ * Escalas registradas en un puerto dentro de una ventana de fechas.
+ *
+ * Pensado para cruzar con documentacion aduanera: una declaracion de
+ * importacion trae la fecha de llegada y el puerto, pero no el buque. Esto
+ * devuelve que buques estuvieron ahi en esas fechas, para poder cotejarlo con
+ * el documento de transporte, que es quien si nombra la nave.
+ *
+ * No hace la correlacion por ti, y no puede: sin el numero de BL, varios buques
+ * pueden encajar en la misma ventana. Devuelve candidatos, no respuestas.
+ */
+export async function getPortCalls(portId, { from, to, callType = null, limit = 500 } = {}) {
+  const { rows } = await query(
+    `SELECT d.id, d.mmsi, d.call_type, d.arrived_at, d.departed_at, d.dwell_seconds,
+            v.name, v.imo, v.ship_type_label, v.flag
+       FROM port_call_durations d
+       JOIN vessels v ON v.mmsi = d.mmsi
+      WHERE d.port_id = $1
+        AND d.arrived_at < $3
+        AND COALESCE(d.departed_at, now()) > $2
+        AND ($4::text IS NULL OR d.call_type = $4)
+      ORDER BY d.arrived_at
+      LIMIT $5`,
+    [portId, from, to, callType, limit],
+  );
+  return rows;
+}
+
+/** Busca un buque por IMO, MMSI o parte del nombre. */
+export async function findVessels(term, limit = 50) {
+  const digits = /^\d+$/.test(term) ? Number(term) : null;
+  const { rows } = await query(
+    `SELECT mmsi, imo, name, ship_type_code, ship_type_label, flag, last_seen_at
+       FROM vessels
+      WHERE ($1::bigint IS NOT NULL AND (mmsi = $1 OR imo = $1))
+         OR name ILIKE $2
+      ORDER BY last_seen_at DESC NULLS LAST
+      LIMIT $3`,
+    [digits, `%${term}%`, limit],
+  );
+  return rows;
+}
+
+/**
+ * Trafico observado en un puerto, agregado por periodo.
+ *
+ * Esta es la pieza para cruzar con estadistica aduanera: una serie de
+ * declaraciones por mes (peso, valor, subpartida) frente a una serie de trafico
+ * observado por mes (escalas atracadas, buques distintos, permanencia media,
+ * de que puertos venian). Se correlacionan las series, no los envios.
+ *
+ * Lo que mide es presencia y tiempo de muelle, NO carga movida: el AIS no da
+ * toneladas. Una escala atracada larga sugiere mas trabajo que una corta, y
+ * nada mas.
+ */
+export async function getPortTraffic(portId, { from, to, bucket = 'month' } = {}) {
+  const allowed = { day: 'day', week: 'week', month: 'month', quarter: 'quarter', year: 'year' };
+  const unit = allowed[bucket];
+  if (!unit) throw new Error(`bucket debe ser uno de: ${Object.keys(allowed).join(', ')}`);
+
+  const { rows } = await query(
+    `SELECT date_trunc('${unit}', c.arrived_at)        AS period,
+            c.call_type,
+            COUNT(*)::int                              AS calls,
+            COUNT(DISTINCT c.mmsi)::int                AS vessels,
+            COUNT(*) FILTER (WHERE v.ship_type_label = 'Cargo')::int  AS cargo_calls,
+            COUNT(*) FILTER (WHERE v.ship_type_label = 'Tanker')::int AS tanker_calls,
+            AVG(EXTRACT(EPOCH FROM (c.departed_at - c.arrived_at)))   AS avg_dwell_seconds
+       FROM port_calls c
+       JOIN vessels v ON v.mmsi = c.mmsi
+      WHERE c.port_id = $1 AND c.arrived_at >= $2 AND c.arrived_at < $3
+      GROUP BY period, c.call_type
+      ORDER BY period, c.call_type`,
+    [portId, from, to],
+  );
+  return rows;
+}
+
+/**
+ * De que puertos llegaron los buques que atracaron aqui, y cuantos de cada uno.
+ * Con la declaracion en la mano, el pais de origen se compara contra esto.
+ *
+ * Solo cuenta tramos cerrados: un buque cuyo tramo de llegada nunca se cerro no
+ * tiene origen conocido, y se informa aparte en `sin_origen` en vez de
+ * repartirlo entre los demas.
+ */
+export async function getPortOrigins(portId, { from, to, limit = 50 } = {}) {
+  const { rows } = await query(
+    `SELECT o.id            AS origin_port_id,
+            o.unlocode      AS origin_unlocode,
+            o.name          AS origin_name,
+            o.country       AS origin_country,
+            COUNT(*)::int   AS arrivals,
+            AVG(l.transit_seconds) AS avg_transit_seconds
+       FROM route_legs l
+       JOIN ports o ON o.id = l.origin_port_id
+      WHERE l.destination_port_id = $1
+        AND l.arrived_at >= $2 AND l.arrived_at < $3
+      GROUP BY o.id, o.unlocode, o.name, o.country
+      ORDER BY arrivals DESC
+      LIMIT $4`,
+    [portId, from, to, limit],
+  );
+
+  const { rows: unknown } = await query(
+    `SELECT COUNT(*)::int AS n
+       FROM port_calls c
+      WHERE c.port_id = $1 AND c.arrived_at >= $2 AND c.arrived_at < $3
+        AND NOT EXISTS (
+          SELECT 1 FROM route_legs l
+           WHERE l.mmsi = c.mmsi AND l.destination_port_id = $1
+             AND l.arrived_at BETWEEN c.arrived_at - interval '1 hour'
+                                  AND c.arrived_at + interval '1 hour')`,
+    [portId, from, to],
+  );
+
+  return { origins: rows, sin_origen: unknown[0].n };
+}
+
 /** Transito medio entre dos puertos concretos, sobre tramos ya cerrados. */
 export async function getTransitStats(originPortId, destinationPortId) {
   const { rows } = await query(
