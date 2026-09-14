@@ -1,0 +1,26 @@
+{
+  "name": "merchant-ship-tracker",
+  "version": "1.0.0",
+  "description": "Rastreo mundial de buques mercantes (carga y tanque) a partir de datos AIS: escalas de puerto, permanencia, tránsito y estimación de rutas.",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "main": "src/api/server.js",
+  "scripts": {
+    "migrate": "node scripts/migrate.js",
+    "seed": "node scripts/seed.js",
+    "ingest": "node src/ingest/index.js",
+    "api": "node src/api/server.js",
+    "jobs": "node src/jobs/scheduler.js",
+    "job:partitions": "node src/jobs/scheduler.js --once=partitions",
+    "job:retention": "node src/jobs/scheduler.js --once=retention",
+    "test": "node --test test/",
+    "test:unit": "node --test test/geo.test.js test/shipTypes.test.js test/portIndex.test.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.12.0",
+    "ws": "^8.18.0"
+  }
+}
