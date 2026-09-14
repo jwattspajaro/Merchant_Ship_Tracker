@@ -307,6 +307,20 @@ if (isMainModule(import.meta.url)) {
   const server = app.listen(config.port, () => {
     console.log(`[api] escuchando en http://localhost:${config.port}`);
   });
+
+  server.on('error', (err) => {
+    // Lo mas habitual al arrancar: el puerto lo tiene otro proceso. Un volcado
+    // de pila no ayuda a nadie; decir que pasa y como salir de ello, si.
+    if (err.code === 'EADDRINUSE') {
+      console.error(
+        `[api] el puerto ${config.port} ya esta ocupado por otro proceso.\n` +
+          `      Libera el puerto o arranca en otro:  PORT=3010 npm run api`,
+      );
+      process.exit(1);
+    }
+    console.error('[api] no se pudo abrir el servidor:', err.message);
+    process.exit(1);
+  });
   const shutdown = () => server.close(() => closePool().then(() => process.exit(0)));
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
